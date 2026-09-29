@@ -1,0 +1,59 @@
+# Recording rules. Naming: level:metric:operations (Prometheus convention).
+groups:
+  - name: gen_ai_local
+    interval: 30s
+    rules:
+      - record: model:gen_ai_requests:rate5m
+        expr: sum by (gen_ai_request_model) (rate(gen_ai_client_operation_duration_seconds_count[5m]))
+      - record: model:gen_ai_request_errors:rate5m
+        expr: sum by (gen_ai_request_model) (rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[5m]))
+      - record: model:gen_ai_ttft_seconds:p50_5m
+        expr: histogram_quantile(0.50, sum by (le, gen_ai_request_model) (rate(gen_ai_server_time_to_first_token_seconds_bucket[5m])))
+      - record: model:gen_ai_ttft_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_server_time_to_first_token_seconds_bucket[5m])))
+      # Decode speed as tokens per second: the inverse of mean time per output token.
+      - record: model:gen_ai_decode_tokens_per_second:mean5m
+        expr: |
+          sum by (gen_ai_request_model) (rate(gen_ai_server_time_per_output_token_seconds_count[5m]))
+          /
+          sum by (gen_ai_request_model) (rate(gen_ai_server_time_per_output_token_seconds_sum[5m]))
+      - record: model:gen_ai_tokens:rate5m
+        expr: sum by (gen_ai_request_model, gen_ai_token_type) (rate(ollama_tokens_total[5m]))
+
+  # SLIs for the local LLM, pre-computed per window for burn-rate alerts.
+  # Availability: requests without an upstream error.
+  # Latency: streamed chat requests with a first token inside 4 s.
+  - name: gen_ai_local_sli
+    interval: 30s
+    rules:
+      - record: sli:gen_ai_availability_errors:ratio_rate5m
+        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[5m])) / sum(rate(gen_ai_client_operation_duration_seconds_count[5m]))
+      - record: sli:gen_ai_availability_errors:ratio_rate30m
+        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[30m])) / sum(rate(gen_ai_client_operation_duration_seconds_count[30m]))
+      - record: sli:gen_ai_availability_errors:ratio_rate1h
+        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[1h])) / sum(rate(gen_ai_client_operation_duration_seconds_count[1h]))
+      - record: sli:gen_ai_availability_errors:ratio_rate6h
+        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[6h])) / sum(rate(gen_ai_client_operation_duration_seconds_count[6h]))
+      - record: sli:gen_ai_ttft_slow:ratio_rate5m
+        expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[5m])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[5m]))
+      - record: sli:gen_ai_ttft_slow:ratio_rate30m
+        expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[30m])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[30m]))
+      - record: sli:gen_ai_ttft_slow:ratio_rate1h
+        expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[1h])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[1h]))
+      - record: sli:gen_ai_ttft_slow:ratio_rate6h
+        expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[6h])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[6h]))
+
+  - name: claude_code
+    interval: 1m
+    rules:
+      - record: model:claude_code_cost_usd:rate1h
+        expr: sum by (model) (increase(claude_code_cost_usage_USD_total[1h]))
+      - record: type:claude_code_tokens:rate5m
+        expr: sum by (type, model) (rate(claude_code_token_usage_tokens_total[5m]))
+      # Share of input served from the prompt cache. Low values mean context
+      # churn: compaction, reordered system prompts, or cold sessions.
+      - record: claude_code_cache_read:ratio_rate1h
+        expr: |
+          sum(increase(claude_code_token_usage_tokens_total{type="cacheRead"}[1h]))
+          /
+          sum(increase(claude_code_token_usage_tokens_total{type=~"input|cacheRead|cacheCreation"}[1h]))

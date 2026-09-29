@@ -1,0 +1,50 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - rules/*.yml
+
+# OTLP push from Alloy. Resource attributes become labels only when promoted;
+# the rest stay on target_info, which keeps per-series cardinality down.
+otlp:
+  promote_resource_attributes:
+    - service.name
+    - service.version
+    - host.name
+  translation_strategy: UnderscoreEscapingWithSuffixes
+
+storage:
+  tsdb:
+    # OTLP batches can arrive late; accept up to 30 minutes out of order.
+    out_of_order_time_window: 30m
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: ollama-exporter
+    static_configs:
+      - targets: ["ollama-exporter:11435"]
+
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+
+  # Host and GPU exporters on the machine that runs Ollama.
+  # Remove these jobs if the host has no node_exporter or nvidia_gpu_exporter.
+  - job_name: node
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+  - job_name: nvidia-gpu
+    static_configs:
+      - targets: ["host.docker.internal:9835"]

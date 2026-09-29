@@ -1,0 +1,72 @@
+// OTLP in, three backends out.
+// Claude Code (and any OTel SDK) sends metrics, logs (events) and traces here.
+
+otelcol.receiver.otlp "default" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+
+  output {
+    metrics = [otelcol.processor.attributes.scrub.input]
+    logs    = [otelcol.processor.attributes.scrub.input]
+    traces  = [otelcol.processor.attributes.scrub.input]
+  }
+}
+
+// Identity attributes stay out of storage. Claude Code attaches the account
+// email and IDs to every metric and event; none of them are needed for
+// operating the agent, and they would turn every screenshot into a leak.
+otelcol.processor.attributes "scrub" {
+  action {
+    key    = "user.email"
+    action = "delete"
+  }
+  action {
+    key    = "user.account_uuid"
+    action = "delete"
+  }
+  action {
+    key    = "user.account_id"
+    action = "delete"
+  }
+  action {
+    key    = "user.id"
+    action = "delete"
+  }
+  action {
+    key    = "organization.id"
+    action = "delete"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+// Prometheus stores cumulative series, so clients must export cumulative
+// temporality (see client/claude-code.env). Alloy's deltatocumulative
+// processor would convert, but it is experimental and off by default.
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.prometheus.input]
+    logs    = [otelcol.exporter.otlphttp.loki.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlphttp "prometheus" {
+  client { endpoint = "http://prometheus:9090/api/v1/otlp" }
+}
+
+otelcol.exporter.otlphttp "loki" {
+  client { endpoint = "http://loki:3100/otlp" }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls { insecure = true }
+  }
+}

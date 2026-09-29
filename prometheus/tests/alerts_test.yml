@@ -1,0 +1,34 @@
+# promtool test rules prometheus/tests/alerts_test.yml
+rule_files:
+  - ../rules/recording.yml
+  - ../rules/alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # 20% of requests fail for an hour at 1 req/s: the fast burn alert fires.
+  - interval: 30s
+    input_series:
+      - series: 'gen_ai_client_operation_duration_seconds_count{gen_ai_request_model="m",error_type=""}'
+        values: '0+24x180'
+      - series: 'gen_ai_client_operation_duration_seconds_count{gen_ai_request_model="m",error_type="500"}'
+        values: '0+6x180'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LocalLLMAvailabilityBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: Local LLM is burning its 30-day error budget at 14x or more.
+
+  # Same error ratio at one request per hour: the traffic floor holds the page.
+  - interval: 30s
+    input_series:
+      - series: 'gen_ai_client_operation_duration_seconds_count{gen_ai_request_model="m",error_type=""}'
+        values: '0+0.0066x180'
+      - series: 'gen_ai_client_operation_duration_seconds_count{gen_ai_request_model="m",error_type="500"}'
+        values: '0+0.0017x180'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LocalLLMAvailabilityBudgetBurnFast
+        exp_alerts: []

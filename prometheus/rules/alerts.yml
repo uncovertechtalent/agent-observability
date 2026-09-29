@@ -1,0 +1,60 @@
+# Burn-rate alerts follow the multi-window, multi-burn-rate pattern from the
+# Google SRE Workbook, chapter 5. SLO targets: availability 99%, latency 95%.
+# A homelab sees little traffic, so each alert also requires a minimum request
+# rate; without it one failed request in a quiet hour pages.
+groups:
+  - name: gen_ai_local_slo
+    rules:
+      - alert: LocalLLMAvailabilityBudgetBurnFast
+        expr: |
+          sli:gen_ai_availability_errors:ratio_rate1h > (14.4 * 0.01)
+          and sli:gen_ai_availability_errors:ratio_rate5m > (14.4 * 0.01)
+          and sum(rate(gen_ai_client_operation_duration_seconds_count[1h])) > 1/600
+        labels: {severity: page}
+        annotations:
+          summary: Local LLM is burning its 30-day error budget at 14x or more.
+      - alert: LocalLLMAvailabilityBudgetBurnSlow
+        expr: |
+          sli:gen_ai_availability_errors:ratio_rate6h > (6 * 0.01)
+          and sli:gen_ai_availability_errors:ratio_rate30m > (6 * 0.01)
+          and sum(rate(gen_ai_client_operation_duration_seconds_count[6h])) > 1/1800
+        labels: {severity: ticket}
+        annotations:
+          summary: Local LLM is burning its 30-day error budget at 6x or more.
+      - alert: LocalLLMLatencyBudgetBurnFast
+        expr: |
+          sli:gen_ai_ttft_slow:ratio_rate1h > (14.4 * 0.05)
+          and sli:gen_ai_ttft_slow:ratio_rate5m > (14.4 * 0.05)
+        labels: {severity: page}
+        annotations:
+          summary: Over 72% of streamed chat requests wait more than 4 s for the first token.
+
+  - name: gen_ai_local_symptoms
+    rules:
+      - alert: OllamaDown
+        expr: ollama_up == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: The exporter cannot reach Ollama's /api/ps.
+      - alert: OllamaExporterDown
+        expr: up{job="ollama-exporter"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: Prometheus cannot scrape the Ollama metering proxy.
+      - alert: ModelSpilledToCPU
+        expr: ollama_loaded_model_info{processor!="gpu"} == 1 and on() sum(ollama_requests_in_flight) > 0
+        for: 5m
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $labels.model }} is serving from {{ $labels.processor }}; expect slow decode."
+
+  - name: claude_code_spend
+    rules:
+      - alert: ClaudeCodeSpendSpike
+        expr: sum(model:claude_code_cost_usd:rate1h) > 20
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: Claude Code spend is above $20 per hour.
