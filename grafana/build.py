@@ -366,6 +366,56 @@ def host():
                      p, time_from="now-6h")
 
 
+def host_public():
+    """Public cut of host(): no unit, container, mount, disk, NIC, sensor or job names.
+
+    Per-device series are summed or maxed into one line each; the services and
+    containers row is dropped. Share this one, not host.
+    """
+    d = host()
+    n = 'job="node"'
+    fs = f'{n},fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs|fuse.*",mountpoint!~"/run.*|/var/lib/docker.*|/snap.*"'
+    dev = f'{n},device!~"loop.*|ram.*|zd.*"'
+    nic = f'{n},device!~"lo|veth.*|docker.*|br-.*|tailscale.*"'
+    swap = {
+        "Throughput": [(f'sum(rate(node_disk_read_bytes_total{{{dev}}}[5m]))', "read"),
+                       (f'-sum(rate(node_disk_written_bytes_total{{{dev}}}[5m]))', "write")],
+        "IOPS": [(f'sum(rate(node_disk_reads_completed_total{{{dev}}}[5m]))', "read"),
+                 (f'-sum(rate(node_disk_writes_completed_total{{{dev}}}[5m]))', "write")],
+        "Utilisation and latency": [(f'max(rate(node_disk_io_time_seconds_total{{{dev}}}[5m]))', "busiest disk")],
+        "Read and write latency": [
+            (f'sum(rate(node_disk_read_time_seconds_total{{{dev}}}[5m])) / sum(rate(node_disk_reads_completed_total{{{dev}}}[5m]))', "read"),
+            (f'sum(rate(node_disk_write_time_seconds_total{{{dev}}}[5m])) / sum(rate(node_disk_writes_completed_total{{{dev}}}[5m]))', "write")],
+        "Filesystem used": [(f'max(1 - node_filesystem_avail_bytes{{{fs}}} / node_filesystem_size_bytes{{{fs}}})', "fullest filesystem")],
+        "Inodes used": [(f'max(1 - node_filesystem_files_free{{{fs}}} / node_filesystem_files{{{fs}}})', "fullest filesystem")],
+        "Traffic": [(f'sum(rate(node_network_receive_bytes_total{{{nic}}}[5m])) * 8', "in"),
+                    (f'-sum(rate(node_network_transmit_bytes_total{{{nic}}}[5m])) * 8', "out")],
+        "Errors and drops": [
+            (f'sum(rate(node_network_receive_errs_total{{{nic}}}[5m]) + rate(node_network_transmit_errs_total{{{nic}}}[5m]))', "errors"),
+            (f'sum(rate(node_network_receive_drop_total{{{nic}}}[5m]) + rate(node_network_transmit_drop_total{{{nic}}}[5m]))', "drops")],
+        "Temperatures": [(f'max(node_hwmon_temp_celsius{{{n}}})', "hottest sensor"),
+                         (f'avg(node_hwmon_temp_celsius{{{n}}})', "average")],
+        "Fans": [(f'avg(node_hwmon_fan_rpm{{{n}}} > 0)', "average fan")],
+        "Scrape duration by job": [("max(scrape_duration_seconds)", "slowest scrape")],
+        "Targets up": [("sum(up)", "up"), ("count(up)", "configured")],
+    }
+    out, skip = [], False
+    for p in d["panels"]:
+        if p.get("type") == "row":
+            skip = p["title"] == "Services and containers"
+        if skip:
+            continue
+        if p.get("title") in swap:
+            p["targets"] = [target(e, l, ref=chr(65 + i)) for i, (e, l) in enumerate(swap[p["title"]])]
+        for tg in p.get("targets", []):
+            tg["expr"] = f'max without (instance, job, uuid, name, device, mountpoint, fstype, chip, sensor) ({tg["expr"]})'
+        out.append(p)
+    d["panels"] = out
+    d["uid"] = "host-public"
+    d["title"] = "Host (Ollama box), public"
+    return d
+
+
 def claude_code():
     L = Layout()
     ev = '{service_name="claude-code"}'
@@ -435,7 +485,7 @@ def claude_code():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), claude_code()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
