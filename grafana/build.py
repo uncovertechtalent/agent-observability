@@ -418,7 +418,7 @@ def host_public():
 
 def claude_code():
     L = Layout()
-    ev = '{service_name="claude-code"}'
+    ev = '{service_name=~"claude-code.*"}'
     p = [
         L.row("Spend and volume"),
         L.place(stat("Cost (range)", 'sum(increase(claude_code_cost_usage_USD_total[$__range]))', "currencyUSD", decimals=2), 4, 4),
@@ -472,10 +472,10 @@ def claude_code():
         L.place({
             "type": "table", "title": "Slowest interactions (Tempo)", "datasource": TEMPO,
             "targets": [{"datasource": TEMPO, "refId": "A", "queryType": "traceql", "limit": 20,
-                         "query": '{resource.service.name="claude-code" && name="claude_code.interaction"} | select(span.interaction.duration_ms)'}],
+                         "query": '{resource.service.name=~"claude-code.*" && name="claude_code.interaction"} | select(span.interaction.duration_ms)'}],
         }, 12, 9),
         L.place(timeseries("Span rate and p95 by span name (Tempo span metrics)", [
-            ('sum by (span_name) (rate(traces_spanmetrics_calls_total{service="claude-code"}[5m]))', "{{span_name}}"),
+            ('sum by (span_name) (rate(traces_spanmetrics_calls_total{service=~"claude-code.*"}[5m]))', "{{span_name}}"),
         ], "reqps"), 12, 9),
     ]
     return dashboard("claude-code", "Claude Code agents",
@@ -483,9 +483,37 @@ def claude_code():
                      p, time_from="now-24h")
 
 
+def claude_code_public():
+    """Public cut of claude_code(): metrics only, no logs, traces or skill names.
+
+    The log and trace rows show commands and file paths, and skill and MCP names
+    describe private work, so those panels are dropped and every query sheds the
+    identifying labels (process_owner, MCP, skill, OS and version details).
+    """
+    d = claude_code()
+    drop_rows = {"Tools and API (events in Loki)", "Traces"}
+    drop_titles = {"Cost by skill and agent"}
+    strip = ("instance, job, process_owner, os_type, os_version, host_arch, service_version, service_name, "
+             "terminal_type, mcp_server_name, mcp_tool_name, skill_name, agent_name, session_id, "
+             "user_account_uuid, user_email, organization_id, claude_deployment_mode, start_type")
+    out, skip = [], False
+    for p in d["panels"]:
+        if p.get("type") == "row":
+            skip = p["title"] in drop_rows
+        if skip or p.get("title") in drop_titles:
+            continue
+        for tg in p.get("targets", []):
+            tg["expr"] = f'sum without ({strip}) ({tg["expr"]})'
+        out.append(p)
+    d["panels"] = out
+    d["uid"] = "claude-code-public"
+    d["title"] = "Claude Code agents, public"
+    return d
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
