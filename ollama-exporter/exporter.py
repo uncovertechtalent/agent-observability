@@ -175,12 +175,21 @@ async def proxy(request: web.Request) -> web.StreamResponse:
     url = f"{UPSTREAM}{path}"
 
     if operation is None:
-        async with session.request(request.method, url, params=request.query, data=body, headers=headers) as up:
-            data = await up.read()
-            return web.Response(body=data, status=up.status, headers={
-                k: v for k, v in up.headers.items()
-                if k.lower() not in ("content-length", "transfer-encoding", "content-encoding")
-            })
+        # Not an inference call (pull, tags, show, ps, ...). Stream it through
+        # unmetered so long operations such as model pulls keep their progress output.
+        try:
+            async with session.request(request.method, url, params=request.query, data=body, headers=headers) as up:
+                resp = web.StreamResponse(status=up.status, headers={
+                    k: v for k, v in up.headers.items()
+                    if k.lower() not in ("content-length", "transfer-encoding", "content-encoding")
+                })
+                await resp.prepare(request)
+                async for chunk in up.content.iter_any():
+                    await resp.write(chunk)
+                await resp.write_eof()
+                return resp
+        except (ConnectionError, asyncio.TimeoutError) as exc:
+            raise web.HTTPBadGateway(text=f"upstream error: {type(exc).__name__}")
 
     openai = path.startswith("/v1/")
     model, streaming = _parse_request(body, openai)

@@ -46,7 +46,9 @@ OBS_HOST=your-host source client/claude-code.env
 claude
 ```
 
-Point LLM clients at `http://your-host:11435` instead of `:11434`. The proxy passes every request through unchanged. `scripts/load.sh your-host` sends a mixed load so every panel has data.
+Point LLM clients at `http://your-host:11435` instead of `:11434`. The proxy passes every request through unchanged.
+
+**Transparent mode.** When many clients hardcode Ollama's port, move Ollama instead of the clients: set `OLLAMA_HOST=0.0.0.0:11436` on the Ollama service, then `OLLAMA_PROXY_PORT=11434` and `OLLAMA_UPSTREAM=http://host.docker.internal:11436` in `.env`. Every client is metered and none is edited. The proxy is then in the path of all inference; `restart: unless-stopped` brings it back after a crash, and `OllamaExporterDown` alerts if it stays down. `scripts/load.sh your-host` sends a mixed load so every panel has data.
 
 The `node` and `nvidia-gpu` scrape jobs expect [node_exporter](https://github.com/prometheus/node_exporter) on :9100 and [nvidia_gpu_exporter](https://github.com/utkuozdemir/nvidia_gpu_exporter) on :9835 on the Docker host. Delete the jobs if the host has neither.
 

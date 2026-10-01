@@ -74,7 +74,10 @@ services:
     environment:
       - OLLAMA_UPSTREAM=${OLLAMA_UPSTREAM:-http://host.docker.internal:11434}
     ports:
-      - "11435:11435" # point clients here instead of :11434 to meter them
+      # Clients that use this port are metered. Default 11435 sits next to Ollama on
+      # 11434. To meter every client without editing them, move Ollama to another
+      # port and set OLLAMA_PROXY_PORT=11434 (see README, "Transparent mode").
+      - "${OLLAMA_PROXY_PORT:-11435}:11435"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
