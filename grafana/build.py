@@ -188,6 +188,184 @@ def local_llm_public():
     return d
 
 
+def host():
+    """Full host view for the box that runs Ollama: node_exporter, nvidia-smi, cAdvisor.
+
+    Deliberately wide; trim panels once a few weeks of data show which ones get read.
+    """
+    L = Layout()
+    n = 'job="node"'
+    cores = f'count(node_cpu_seconds_total{{{n},mode="idle"}})'
+    fs = f'{n},fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs|fuse.*",mountpoint!~"/run.*|/var/lib/docker.*|/snap.*"'
+    dev = f'{n},device!~"loop.*|ram.*|zd.*"'
+    nic = f'{n},device!~"lo|veth.*|docker.*|br-.*|tailscale.*"'
+    p = [
+        L.row("Overview"),
+        L.place(stat("Uptime", f'time() - node_boot_time_seconds{{{n}}}', "s"), 3, 4),
+        L.place(stat("CPU busy", f'1 - avg(rate(node_cpu_seconds_total{{{n},mode="idle"}}[5m]))', "percentunit", decimals=1), 3, 4),
+        L.place(stat("Load 5 per core", f'node_load5{{{n}}} / scalar({cores})', decimals=2), 3, 4),
+        L.place(stat("Memory used", f'1 - node_memory_MemAvailable_bytes{{{n}}} / node_memory_MemTotal_bytes{{{n}}}', "percentunit", decimals=1), 3, 4),
+        L.place(stat("Root filesystem used", f'1 - node_filesystem_avail_bytes{{{n},mountpoint="/"}} / node_filesystem_size_bytes{{{n},mountpoint="/"}}', "percentunit", decimals=1), 3, 4),
+        L.place(stat("GPU temperature", 'max(nvidia_smi_temperature_gpu)', "celsius"), 3, 4),
+        L.place(stat("GPU power", 'sum(nvidia_smi_power_draw_watts)', "watt"), 3, 4),
+        L.place(stat("Failed systemd units", f'count(node_systemd_unit_state{{{n},state="failed"}} == 1) or vector(0)', decimals=0), 3, 4),
+
+        L.row("CPU"),
+        L.place(timeseries("CPU by mode", [
+            (f'sum by (mode) (rate(node_cpu_seconds_total{{{n},mode!="idle"}}[5m])) / scalar({cores})', "{{mode}}"),
+        ], "percentunit", stack=True), 12, 8),
+        L.place(timeseries("Busy per core", [
+            (f'1 - rate(node_cpu_seconds_total{{{n},mode="idle"}}[5m])', "cpu {{cpu}}"),
+        ], "percentunit"), 12, 8),
+        L.place(timeseries("Load average", [
+            (f'node_load1{{{n}}}', "1m"), (f'node_load5{{{n}}}', "5m"), (f'node_load15{{{n}}}', "15m"), (cores, "cores"),
+        ]), 8, 8),
+        L.place(timeseries("Pressure stall (PSI)", [
+            (f'rate(node_pressure_cpu_waiting_seconds_total{{{n}}}[5m])', "cpu waiting"),
+            (f'rate(node_pressure_memory_waiting_seconds_total{{{n}}}[5m])', "memory waiting"),
+            (f'rate(node_pressure_memory_stalled_seconds_total{{{n}}}[5m])', "memory stalled"),
+            (f'rate(node_pressure_io_waiting_seconds_total{{{n}}}[5m])', "io waiting"),
+            (f'rate(node_pressure_io_stalled_seconds_total{{{n}}}[5m])', "io stalled"),
+        ], "percentunit", description="Share of wall time tasks spent waiting on the resource. Stalled = all tasks blocked at once."), 8, 8),
+        L.place(timeseries("Scheduler", [
+            (f'rate(node_context_switches_total{{{n}}}[5m])', "context switches/s"),
+            (f'rate(node_intr_total{{{n}}}[5m])', "interrupts/s"),
+            (f'node_procs_running{{{n}}}', "procs running"),
+            (f'node_procs_blocked{{{n}}}', "procs blocked"),
+        ]), 8, 8),
+
+        L.row("Memory"),
+        L.place(timeseries("Memory breakdown", [
+            (f'node_memory_MemTotal_bytes{{{n}}} - node_memory_MemFree_bytes{{{n}}} - node_memory_Buffers_bytes{{{n}}} - node_memory_Cached_bytes{{{n}}} - node_memory_SReclaimable_bytes{{{n}}}', "used"),
+            (f'node_memory_Buffers_bytes{{{n}}}', "buffers"),
+            (f'node_memory_Cached_bytes{{{n}}} + node_memory_SReclaimable_bytes{{{n}}}', "cache"),
+            (f'node_memory_MemFree_bytes{{{n}}}', "free"),
+        ], "bytes", stack=True), 12, 8),
+        L.place(timeseries("Swap and paging", [
+            (f'node_memory_SwapTotal_bytes{{{n}}} - node_memory_SwapFree_bytes{{{n}}}', "swap used"),
+        ], "bytes"), 6, 8),
+        L.place(timeseries("Faults and swap traffic", [
+            (f'rate(node_vmstat_pgmajfault{{{n}}}[5m])', "major faults/s"),
+            (f'rate(node_vmstat_pswpin{{{n}}}[5m])', "swap in pages/s"),
+            (f'rate(node_vmstat_pswpout{{{n}}}[5m])', "swap out pages/s"),
+        ]), 6, 8),
+        L.place(timeseries("ZFS ARC", [
+            (f'node_zfs_arc_size{{{n}}}', "ARC size"), (f'node_zfs_arc_c_max{{{n}}}', "ARC max"),
+        ], "bytes", description="ZFS cache competes with model loading for RAM."), 12, 8),
+        L.place(timeseries("ZFS ARC hit ratio", [
+            (f'rate(node_zfs_arc_hits{{{n}}}[5m]) / (rate(node_zfs_arc_hits{{{n}}}[5m]) + rate(node_zfs_arc_misses{{{n}}}[5m]))', "hit ratio"),
+        ], "percentunit"), 12, 8),
+
+        L.row("Disk"),
+        L.place(timeseries("Throughput", [
+            (f'rate(node_disk_read_bytes_total{{{dev}}}[5m])', "{{device}} read"),
+            (f'-rate(node_disk_written_bytes_total{{{dev}}}[5m])', "{{device}} write"),
+        ], "Bps", description="Writes plotted below zero."), 8, 8),
+        L.place(timeseries("IOPS", [
+            (f'rate(node_disk_reads_completed_total{{{dev}}}[5m])', "{{device}} read"),
+            (f'-rate(node_disk_writes_completed_total{{{dev}}}[5m])', "{{device}} write"),
+        ], "iops"), 8, 8),
+        L.place(timeseries("Utilisation and latency", [
+            (f'rate(node_disk_io_time_seconds_total{{{dev}}}[5m])', "{{device}} busy"),
+        ], "percentunit"), 8, 8),
+        L.place(timeseries("Read and write latency", [
+            (f'rate(node_disk_read_time_seconds_total{{{dev}}}[5m]) / rate(node_disk_reads_completed_total{{{dev}}}[5m])', "{{device}} read"),
+            (f'rate(node_disk_write_time_seconds_total{{{dev}}}[5m]) / rate(node_disk_writes_completed_total{{{dev}}}[5m])', "{{device}} write"),
+        ], "s"), 8, 8),
+        L.place(timeseries("Filesystem used", [
+            (f'1 - node_filesystem_avail_bytes{{{fs}}} / node_filesystem_size_bytes{{{fs}}}', "{{mountpoint}}"),
+        ], "percentunit"), 8, 8),
+        L.place(timeseries("Inodes used", [
+            (f'1 - node_filesystem_files_free{{{fs}}} / node_filesystem_files{{{fs}}}', "{{mountpoint}}"),
+        ], "percentunit"), 8, 8),
+
+        L.row("Network"),
+        L.place(timeseries("Traffic", [
+            (f'rate(node_network_receive_bytes_total{{{nic}}}[5m]) * 8', "{{device}} in"),
+            (f'-rate(node_network_transmit_bytes_total{{{nic}}}[5m]) * 8', "{{device}} out"),
+        ], "bps", description="Outbound plotted below zero. Tailscale and container bridges excluded."), 12, 8),
+        L.place(timeseries("Errors and drops", [
+            (f'rate(node_network_receive_errs_total{{{nic}}}[5m])', "{{device}} rx errors"),
+            (f'rate(node_network_transmit_errs_total{{{nic}}}[5m])', "{{device}} tx errors"),
+            (f'rate(node_network_receive_drop_total{{{nic}}}[5m])', "{{device}} rx drops"),
+            (f'rate(node_network_transmit_drop_total{{{nic}}}[5m])', "{{device}} tx drops"),
+        ]), 12, 8),
+        L.place(timeseries("TCP", [
+            (f'node_netstat_Tcp_CurrEstab{{{n}}}', "established"),
+            (f'node_sockstat_TCP_tw{{{n}}}', "time-wait"),
+            (f'rate(node_netstat_Tcp_RetransSegs{{{n}}}[5m])', "retransmits/s"),
+        ]), 12, 8),
+        L.place(timeseries("Clock", [
+            (f'node_timex_offset_seconds{{{n}}}', "offset"),
+        ], "s", description="NTP offset. Drift breaks trace and log ordering."), 12, 8),
+
+        L.row("GPU"),
+        L.place(timeseries("Utilisation", [
+            ("nvidia_smi_utilization_gpu_ratio", "GPU"), ("nvidia_smi_utilization_memory_ratio", "memory controller"),
+            ("nvidia_smi_utilization_encoder_ratio", "encoder"), ("nvidia_smi_utilization_decoder_ratio", "decoder"),
+        ], "percentunit"), 8, 8),
+        L.place(timeseries("VRAM", [
+            ("nvidia_smi_memory_used_bytes", "used"), ("nvidia_smi_memory_total_bytes", "total"),
+        ], "bytes"), 8, 8),
+        L.place(timeseries("Temperature and fan", [
+            ("nvidia_smi_temperature_gpu", "temperature"),
+        ], "celsius"), 8, 8),
+        L.place(timeseries("Power", [
+            ("nvidia_smi_power_draw_watts", "draw"), ("nvidia_smi_enforced_power_limit_watts", "limit"),
+        ], "watt"), 8, 8),
+        L.place(timeseries("Clocks", [
+            ("nvidia_smi_clocks_current_sm_clock_hz", "SM"), ("nvidia_smi_clocks_current_memory_clock_hz", "memory"),
+            ("nvidia_smi_clocks_max_sm_clock_hz", "SM max"),
+        ], "hertz"), 8, 8),
+        L.place(timeseries("Throttling", [
+            ("nvidia_smi_clocks_event_reasons_sw_power_cap", "power cap"),
+            ("nvidia_smi_clocks_event_reasons_hw_slowdown", "hw slowdown"),
+            ("nvidia_smi_clocks_event_reasons_hw_thermal_slowdown", "hw thermal"),
+            ("nvidia_smi_clocks_event_reasons_sw_thermal_slowdown", "sw thermal"),
+            ("nvidia_smi_fan_speed_ratio", "fan speed"),
+        ], description="1 = active. Power cap during decode is normal; thermal is not."), 8, 8),
+
+        L.row("Sensors"),
+        L.place(timeseries("Temperatures", [
+            (f'node_hwmon_temp_celsius{{{n}}}', "{{chip}} {{sensor}}"),
+        ], "celsius"), 16, 8),
+        L.place(timeseries("Fans", [
+            (f'node_hwmon_fan_rpm{{{n}}}', "{{chip}} {{sensor}}"),
+        ], "rotrpm"), 8, 8),
+
+        L.row("Services and containers"),
+        L.place(table("Failed systemd units", f'node_systemd_unit_state{{{n},state="failed"}} == 1'), 8, 8),
+        L.place(timeseries("Container CPU", [
+            ('sum by (name) (rate(container_cpu_usage_seconds_total{job="cadvisor",name!=""}[5m]))', "{{name}}"),
+        ], description="Cores used per container."), 8, 8),
+        L.place(timeseries("Container memory", [
+            ('container_memory_working_set_bytes{job="cadvisor",name!=""}', "{{name}}"),
+        ], "bytes"), 8, 8),
+        L.place(timeseries("Container network", [
+            ('sum by (name) (rate(container_network_receive_bytes_total{job="cadvisor",name!=""}[5m])) * 8', "{{name}} in"),
+            ('-sum by (name) (rate(container_network_transmit_bytes_total{job="cadvisor",name!=""}[5m])) * 8', "{{name}} out"),
+        ], "bps"), 12, 8),
+        L.place(timeseries("Container disk I/O", [
+            ('sum by (name) (rate(container_fs_reads_bytes_total{job="cadvisor",name!=""}[5m]))', "{{name}} read"),
+            ('-sum by (name) (rate(container_fs_writes_bytes_total{job="cadvisor",name!=""}[5m]))', "{{name}} write"),
+        ], "Bps"), 12, 8),
+
+        L.row("This stack"),
+        L.place(timeseries("Prometheus", [
+            ("prometheus_tsdb_head_series", "head series"),
+        ]), 8, 8),
+        L.place(timeseries("Scrape duration by job", [
+            ("scrape_duration_seconds", "{{job}}"),
+        ], "s"), 8, 8),
+        L.place(timeseries("Targets up", [
+            ("up", "{{job}}"),
+        ]), 8, 8),
+    ]
+    return dashboard("host", "Host (Ollama box)",
+                     "CPU, memory, disk, network, GPU, sensors, services and containers on the host that runs Ollama.",
+                     p, time_from="now-6h")
+
+
 def claude_code():
     L = Layout()
     ev = '{service_name="claude-code"}'
@@ -257,7 +435,7 @@ def claude_code():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), claude_code()):
+    for d in (local_llm(), local_llm_public(), host(), claude_code()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
