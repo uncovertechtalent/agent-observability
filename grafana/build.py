@@ -114,7 +114,7 @@ def dashboard(uid, title, description, panels, variables=(), refresh="30s", time
 def query_var(name, label, query, ds=PROM):
     return {"name": name, "label": label, "type": "query", "datasource": ds,
             "query": {"query": query, "refId": name}, "definition": query,
-            "includeAll": True, "multi": True, "current": {"text": "All", "value": "$__all"}, "refresh": 2}
+            "includeAll": True, "allValue": ".*", "multi": True, "current": {"text": "All", "value": "$__all"}, "refresh": 2}
 
 
 def local_llm():
@@ -173,6 +173,19 @@ def local_llm():
     return dashboard("local-llm", "Local LLM (Ollama)",
                      "Latency, throughput and SLOs for a self-hosted Ollama server, metered by the proxy.",
                      p, [query_var("model", "Model", "label_values(gen_ai_client_operation_duration_seconds_count, gen_ai_request_model)")])
+
+
+def local_llm_public():
+    """Variable-free copy of local-llm for Grafana public sharing.
+
+    Public dashboards do not resolve template variables, so every $model filter
+    becomes .* and the variable is dropped. Share this one, not local-llm.
+    """
+    d = json.loads(json.dumps(local_llm()).replace('=~\\"$model\\"', '=~\\".*\\"'))
+    d["uid"] = "local-llm-public"
+    d["title"] = "Local LLM (Ollama), public"
+    d["templating"] = {"list": []}
+    return d
 
 
 def claude_code():
@@ -244,7 +257,7 @@ def claude_code():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), claude_code()):
+    for d in (local_llm(), local_llm_public(), claude_code()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

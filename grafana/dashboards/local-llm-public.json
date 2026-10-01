@@ -1,6 +1,6 @@
 {
-  "uid": "local-llm",
-  "title": "Local LLM (Ollama)",
+  "uid": "local-llm-public",
+  "title": "Local LLM (Ollama), public",
   "description": "Latency, throughput and SLOs for a self-hosted Ollama server, metered by the proxy.",
   "tags": [
     "agent-observability"
@@ -15,30 +15,7 @@
     "to": "now"
   },
   "templating": {
-    "list": [
-      {
-        "name": "model",
-        "label": "Model",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "prometheus"
-        },
-        "query": {
-          "query": "label_values(gen_ai_client_operation_duration_seconds_count, gen_ai_request_model)",
-          "refId": "model"
-        },
-        "definition": "label_values(gen_ai_client_operation_duration_seconds_count, gen_ai_request_model)",
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        },
-        "refresh": 2
-      }
-    ]
+    "list": []
   },
   "panels": [
     {
@@ -68,7 +45,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\"$model\"}[5m])) * 60",
+          "expr": "sum(rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\".*\"}[5m])) * 60",
           "refId": "A"
         }
       ],
@@ -194,7 +171,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(model:gen_ai_ttft_seconds:p95_5m{gen_ai_request_model=~\"$model\"})",
+          "expr": "max(model:gen_ai_ttft_seconds:p95_5m{gen_ai_request_model=~\".*\"})",
           "refId": "A"
         }
       ],
@@ -236,7 +213,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "avg(model:gen_ai_decode_tokens_per_second:mean5m{gen_ai_request_model=~\"$model\"})",
+          "expr": "avg(model:gen_ai_decode_tokens_per_second:mean5m{gen_ai_request_model=~\".*\"})",
           "refId": "A"
         }
       ],
@@ -332,7 +309,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (le) (increase(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_request_model=~\"$model\"}[$__rate_interval]))",
+          "expr": "sum by (le) (increase(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_request_model=~\".*\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "{{le}}",
           "format": "heatmap"
@@ -374,7 +351,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "model:gen_ai_ttft_seconds:p50_5m{gen_ai_request_model=~\"$model\"}",
+          "expr": "model:gen_ai_ttft_seconds:p50_5m{gen_ai_request_model=~\".*\"}",
           "refId": "A",
           "legendFormat": "p50 {{gen_ai_request_model}}"
         },
@@ -383,7 +360,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "model:gen_ai_ttft_seconds:p95_5m{gen_ai_request_model=~\"$model\"}",
+          "expr": "model:gen_ai_ttft_seconds:p95_5m{gen_ai_request_model=~\".*\"}",
           "refId": "B",
           "legendFormat": "p95 {{gen_ai_request_model}}"
         }
@@ -438,7 +415,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "model:gen_ai_decode_tokens_per_second:mean5m{gen_ai_request_model=~\"$model\"}",
+          "expr": "model:gen_ai_decode_tokens_per_second:mean5m{gen_ai_request_model=~\".*\"}",
           "refId": "A",
           "legendFormat": "{{gen_ai_request_model}}"
         }
@@ -493,7 +470,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(ollama_model_load_duration_seconds_bucket{gen_ai_request_model=~\"$model\"}[15m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(ollama_model_load_duration_seconds_bucket{gen_ai_request_model=~\".*\"}[15m])))",
           "refId": "A",
           "legendFormat": "{{gen_ai_request_model}}"
         }
@@ -561,7 +538,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (gen_ai_token_type) (model:gen_ai_tokens:rate5m{gen_ai_request_model=~\"$model\"})",
+          "expr": "sum by (gen_ai_token_type) (model:gen_ai_tokens:rate5m{gen_ai_request_model=~\".*\"})",
           "refId": "A",
           "legendFormat": "{{gen_ai_token_type}}"
         }
@@ -616,7 +593,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (gen_ai_request_model, api) (rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\"$model\"}[5m]))",
+          "expr": "sum by (gen_ai_request_model, api) (rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\".*\"}[5m]))",
           "refId": "A",
           "legendFormat": "{{gen_ai_request_model}} ({{api}})"
         },
@@ -625,7 +602,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (gen_ai_request_model, error_type) (rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\"$model\",error_type!=\"\"}[5m]))",
+          "expr": "sum by (gen_ai_request_model, error_type) (rate(gen_ai_client_operation_duration_seconds_count{gen_ai_request_model=~\".*\",error_type!=\"\"}[5m]))",
           "refId": "B",
           "legendFormat": "errors {{gen_ai_request_model}} {{error_type}}"
         }

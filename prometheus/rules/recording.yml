@@ -27,13 +27,13 @@ groups:
     interval: 30s
     rules:
       - record: sli:gen_ai_availability_errors:ratio_rate5m
-        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[5m])) / sum(rate(gen_ai_client_operation_duration_seconds_count[5m]))
+        expr: (sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[5m])) or vector(0)) / sum(rate(gen_ai_client_operation_duration_seconds_count[5m]))
       - record: sli:gen_ai_availability_errors:ratio_rate30m
-        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[30m])) / sum(rate(gen_ai_client_operation_duration_seconds_count[30m]))
+        expr: (sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[30m])) or vector(0)) / sum(rate(gen_ai_client_operation_duration_seconds_count[30m]))
       - record: sli:gen_ai_availability_errors:ratio_rate1h
-        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[1h])) / sum(rate(gen_ai_client_operation_duration_seconds_count[1h]))
+        expr: (sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[1h])) or vector(0)) / sum(rate(gen_ai_client_operation_duration_seconds_count[1h]))
       - record: sli:gen_ai_availability_errors:ratio_rate6h
-        expr: sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[6h])) / sum(rate(gen_ai_client_operation_duration_seconds_count[6h]))
+        expr: (sum(rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[6h])) or vector(0)) / sum(rate(gen_ai_client_operation_duration_seconds_count[6h]))
       - record: sli:gen_ai_ttft_slow:ratio_rate5m
         expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[5m])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[5m]))
       - record: sli:gen_ai_ttft_slow:ratio_rate30m
