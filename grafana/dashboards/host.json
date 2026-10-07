@@ -1,7 +1,7 @@
 {
   "uid": "host",
   "title": "Host (Ollama box)",
-  "description": "CPU, memory, disk, network, GPU, sensors, services and containers on the host that runs Ollama.",
+  "description": "CPU, memory, disk, network, GPU, sensors and containers on the host that runs Ollama.",
   "tags": [
     "agent-observability"
   ],
@@ -564,7 +564,7 @@
       "gridPos": {
         "x": 0,
         "y": 14,
-        "w": 8,
+        "w": 12,
         "h": 8
       },
       "id": 13
@@ -653,94 +653,12 @@
         }
       },
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 14,
-        "w": 8,
+        "w": 12,
         "h": 8
       },
       "id": 14
-    },
-    {
-      "type": "timeseries",
-      "title": "Scheduler",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_context_switches_total{job=\"node\"}[5m])",
-          "refId": "A",
-          "legendFormat": "context switches/s"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_intr_total{job=\"node\"}[5m])",
-          "refId": "B",
-          "legendFormat": "interrupts/s"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "node_procs_running{job=\"node\"}",
-          "refId": "C",
-          "legendFormat": "procs running"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "node_procs_blocked{job=\"node\"}",
-          "refId": "D",
-          "legendFormat": "procs blocked"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 14,
-        "w": 8,
-        "h": 8
-      },
-      "id": 15
     },
     {
       "type": "row",
@@ -753,7 +671,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 16
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -835,7 +753,7 @@
         "w": 12,
         "h": 8
       },
-      "id": 17
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -887,83 +805,10 @@
       "gridPos": {
         "x": 12,
         "y": 23,
-        "w": 6,
+        "w": 12,
         "h": 8
       },
-      "id": 18
-    },
-    {
-      "type": "timeseries",
-      "title": "Faults and swap traffic",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_vmstat_pgmajfault{job=\"node\"}[5m])",
-          "refId": "A",
-          "legendFormat": "major faults/s"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_vmstat_pswpin{job=\"node\"}[5m])",
-          "refId": "B",
-          "legendFormat": "swap in pages/s"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_vmstat_pswpout{job=\"node\"}[5m])",
-          "refId": "C",
-          "legendFormat": "swap out pages/s"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 18,
-        "y": 23,
-        "w": 6,
-        "h": 8
-      },
-      "id": 19
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1024,65 +869,10 @@
       "gridPos": {
         "x": 0,
         "y": 31,
-        "w": 12,
+        "w": 24,
         "h": 8
       },
-      "id": 20
-    },
-    {
-      "type": "timeseries",
-      "title": "ZFS ARC hit ratio",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(node_zfs_arc_hits{job=\"node\"}[5m]) / (rate(node_zfs_arc_hits{job=\"node\"}[5m]) + rate(node_zfs_arc_misses{job=\"node\"}[5m]))",
-          "refId": "A",
-          "legendFormat": "hit ratio"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 31,
-        "w": 12,
-        "h": 8
-      },
-      "id": 21
+      "id": 18
     },
     {
       "type": "row",
@@ -1095,7 +885,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 22
+      "id": 19
     },
     {
       "type": "timeseries",
@@ -1159,7 +949,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 23
+      "id": 20
     },
     {
       "type": "timeseries",
@@ -1223,7 +1013,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 24
+      "id": 21
     },
     {
       "type": "timeseries",
@@ -1278,7 +1068,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 25
+      "id": 22
     },
     {
       "type": "timeseries",
@@ -1342,7 +1132,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 26
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1394,65 +1184,10 @@
       "gridPos": {
         "x": 8,
         "y": 48,
-        "w": 8,
+        "w": 16,
         "h": 8
       },
-      "id": 27
-    },
-    {
-      "type": "timeseries",
-      "title": "Inodes used",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "1 - node_filesystem_files_free{job=\"node\",fstype!~\"tmpfs|overlay|squashfs|nsfs|ramfs|fuse.*\",mountpoint!~\"/run.*|/var/lib/docker.*|/snap.*\"} / node_filesystem_files{job=\"node\",fstype!~\"tmpfs|overlay|squashfs|nsfs|ramfs|fuse.*\",mountpoint!~\"/run.*|/var/lib/docker.*|/snap.*\"}",
-          "refId": "A",
-          "legendFormat": "{{mountpoint}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 48,
-        "w": 8,
-        "h": 8
-      },
-      "id": 28
+      "id": 24
     },
     {
       "type": "row",
@@ -1465,7 +1200,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 29
+      "id": 25
     },
     {
       "type": "timeseries",
@@ -1526,10 +1261,10 @@
       "gridPos": {
         "x": 0,
         "y": 57,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
-      "id": 30
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -1606,12 +1341,12 @@
         }
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 57,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
-      "id": 31
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -1679,80 +1414,25 @@
         }
       },
       "gridPos": {
-        "x": 0,
-        "y": 65,
-        "w": 12,
+        "x": 16,
+        "y": 57,
+        "w": 8,
         "h": 8
       },
-      "id": 32
-    },
-    {
-      "type": "timeseries",
-      "title": "Clock",
-      "description": "NTP offset. Drift breaks trace and log ordering.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "node_timex_offset_seconds{job=\"node\"}",
-          "refId": "A",
-          "legendFormat": "offset"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 65,
-        "w": 12,
-        "h": 8
-      },
-      "id": 33
+      "id": 28
     },
     {
       "type": "row",
-      "title": "GPU",
+      "title": "GPU and sensors",
       "collapsed": false,
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 65,
         "w": 24,
         "h": 1
       },
-      "id": 34
+      "id": 29
     },
     {
       "type": "timeseries",
@@ -1830,11 +1510,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 66,
         "w": 8,
         "h": 8
       },
-      "id": 35
+      "id": 30
     },
     {
       "type": "timeseries",
@@ -1894,11 +1574,11 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 74,
+        "y": 66,
         "w": 8,
         "h": 8
       },
-      "id": 36
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -1949,11 +1629,11 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 74,
+        "y": 66,
         "w": 8,
         "h": 8
       },
-      "id": 37
+      "id": 32
     },
     {
       "type": "timeseries",
@@ -2013,11 +1693,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 74,
         "w": 8,
         "h": 8
       },
-      "id": 38
+      "id": 33
     },
     {
       "type": "timeseries",
@@ -2086,11 +1766,11 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 82,
+        "y": 74,
         "w": 8,
         "h": 8
       },
-      "id": 39
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2177,29 +1857,16 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 82,
+        "y": 74,
         "w": 8,
         "h": 8
       },
-      "id": 40
-    },
-    {
-      "type": "row",
-      "title": "Sensors",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "x": 0,
-        "y": 90,
-        "w": 24,
-        "h": 1
-      },
-      "id": 41
+      "id": 35
     },
     {
       "type": "timeseries",
       "title": "Temperatures",
-      "description": "",
+      "description": "Board and CPU sensors from hwmon; GPU temperature is in the row above.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2245,110 +1912,24 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 91,
-        "w": 16,
+        "y": 82,
+        "w": 24,
         "h": 8
       },
-      "id": 42
-    },
-    {
-      "type": "timeseries",
-      "title": "Fans",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "node_hwmon_fan_rpm{job=\"node\"}",
-          "refId": "A",
-          "legendFormat": "{{chip}} {{sensor}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "rotrpm",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 91,
-        "w": 8,
-        "h": 8
-      },
-      "id": 43
+      "id": 36
     },
     {
       "type": "row",
-      "title": "Services and containers",
+      "title": "Containers",
       "collapsed": false,
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 99,
+        "y": 90,
         "w": 24,
         "h": 1
       },
-      "id": 44
-    },
-    {
-      "type": "table",
-      "title": "Failed systemd units",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "node_systemd_unit_state{job=\"node\",state=\"failed\"} == 1",
-          "refId": "A",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "options": {
-        "showHeader": true
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 100,
-        "w": 8,
-        "h": 8
-      },
-      "id": 45
+      "id": 37
     },
     {
       "type": "timeseries",
@@ -2398,12 +1979,12 @@
         }
       },
       "gridPos": {
-        "x": 8,
-        "y": 100,
-        "w": 8,
+        "x": 0,
+        "y": 91,
+        "w": 12,
         "h": 8
       },
-      "id": 46
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -2453,12 +2034,12 @@
         }
       },
       "gridPos": {
-        "x": 16,
-        "y": 100,
-        "w": 8,
+        "x": 12,
+        "y": 91,
+        "w": 12,
         "h": 8
       },
-      "id": 47
+      "id": 39
     },
     {
       "type": "timeseries",
@@ -2518,11 +2099,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 108,
+        "y": 99,
         "w": 12,
         "h": 8
       },
-      "id": 48
+      "id": 40
     },
     {
       "type": "timeseries",
@@ -2582,189 +2163,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 108,
+        "y": 99,
         "w": 12,
         "h": 8
       },
-      "id": 49
-    },
-    {
-      "type": "row",
-      "title": "This stack",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "x": 0,
-        "y": 116,
-        "w": 24,
-        "h": 1
-      },
-      "id": 50
-    },
-    {
-      "type": "timeseries",
-      "title": "Prometheus",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "prometheus_tsdb_head_series",
-          "refId": "A",
-          "legendFormat": "head series"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 117,
-        "w": 8,
-        "h": 8
-      },
-      "id": 51
-    },
-    {
-      "type": "timeseries",
-      "title": "Scrape duration by job",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "scrape_duration_seconds",
-          "refId": "A",
-          "legendFormat": "{{job}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 117,
-        "w": 8,
-        "h": 8
-      },
-      "id": 52
-    },
-    {
-      "type": "timeseries",
-      "title": "Targets up",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "up",
-          "refId": "A",
-          "legendFormat": "{{job}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 117,
-        "w": 8,
-        "h": 8
-      },
-      "id": 53
+      "id": 41
     }
   ],
   "links": [
