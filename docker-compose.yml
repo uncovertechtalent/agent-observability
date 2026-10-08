@@ -103,9 +103,24 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # Reads the GitHub Actions deploy runs of the three websites and the sites' public
+  # JSON; writes run history to Loki and serves the latest state on :9201.
+  deploy-exporter:
+    build: ./deploy-exporter
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}   # read access to the repos and their Actions; private repos need it
+      - LOKI_URL=http://loki:3100
+    volumes:
+      - deploy_exporter_data:/data
+    ports:
+      - "9201:9201"
+    depends_on: [loki]
+    restart: unless-stopped
+
 volumes:
   alloy_data:
   prometheus_data:
   loki_data:
   tempo_data:
   grafana_data:
+  deploy_exporter_data:

@@ -473,9 +473,131 @@ def claude_code_public():
     return d
 
 
+# ---------------------------------------------------------------- website deploys
+
+DEPLOY_SITES = ("machinebehavior.io", "tychat.io", "uncovertechtalent.com")
+
+
+def loki_series(title, targets, unit="short", draw="line", stack=False, description=""):
+    p = timeseries(title, [], unit, stack, description)
+    p["datasource"] = LOKI
+    p["targets"] = [target(e, l, ds=LOKI, ref=chr(65 + i)) for i, (e, l) in enumerate(targets)]
+    if draw == "bars":
+        p["fieldConfig"]["defaults"]["custom"].update(drawStyle="bars", fillOpacity=80, lineWidth=0)
+    return p
+
+
+def site_deploys():
+    """Website deploys: every GitHub Actions run of the three sites, the gate that guards them,
+    and what the deploy shipped (map snapshot) next to the decision-layer probe it reports.
+
+    Public by construction: no template variables, and the exporter keeps titles, SHAs and
+    URLs of private repos out of Loki. Share this dashboard as it is.
+    """
+    L = Layout()
+    outcome_colors = [{"matcher": {"id": "byName", "options": o}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": c}}]}
+                      for o, c in (("deployed", "green"), ("blocked", "red"), ("failed", "orange"), ("cancelled", "text"))]
+    deployed_map = [{"type": "value", "options": {"1": {"text": "deployed", "color": "green", "index": 0},
+                                                  "0": {"text": "not deployed", "color": "red", "index": 1}}}]
+    check_map = [{"type": "value", "options": {"0": {"text": "fail", "color": "red", "index": 0},
+                                               "1": {"text": "pending", "color": "blue", "index": 1},
+                                               "2": {"text": "partial", "color": "yellow", "index": 2},
+                                               "3": {"text": "pass", "color": "green", "index": 3}}}]
+    def now(panel, steps=((None, "blue"),), size=None):
+        """Current value only (the exporter's series start when it does), with explicit colours."""
+        for t in panel["targets"]:
+            t["instant"] = True
+        panel["options"]["graphMode"] = "none"
+        panel["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [{"value": v, "color": c} for v, c in steps]}
+        if size:
+            panel["options"]["text"] = {"valueSize": size}
+        return panel
+
+    p = [L.row("Right now")]
+
+    last = stat("Latest run deployed", "site_deploy_last_deployed", legend="{{site}}",
+                description="1 when the latest run deployed. A run the gate blocked leaves the previous build live and shows here as not deployed.")
+    last["fieldConfig"]["defaults"]["mappings"] = deployed_map
+    last["options"].update(colorMode="background", graphMode="none", textMode="value_and_name")
+    p.append(L.place(now(last), 9, 5))
+    ago = stat("Since the latest deploy", "time() - site_deploy_last_finished_timestamp_seconds", "s", "{{site}}",
+               description="Time since each site's latest deploy run finished.")
+    ago["options"].update(graphMode="none", textMode="value_and_name")
+    p.append(L.place(now(ago, ((None, "green"), (86400, "yellow"), (7 * 86400, "red"))), 9, 5))
+    p.append(L.place(now(stat("Open gate findings", "sum(site_conformity_findings_open)",
+                              description="Findings the conformity gate holds open across the three sites."), ((None, "green"), (1, "red"))), 3, 5))
+    p.append(L.place(now(stat("Runs seen", "sum(site_deploy_runs_total)",
+                              description="Completed deploy runs the exporter has read from GitHub Actions.")), 3, 5))
+
+    p.append(L.row("History"))
+    runs = loki_series("Deploy runs by outcome", [
+        ('sum by (outcome) (count_over_time({job="site-deploys"}[$__interval]))', "{{outcome}}")], draw="bars", stack=True,
+        description="Every completed run of the deploy workflows, per hour. Blocked = the conformity gate failed and the deploy job never ran.")
+    runs["interval"] = "1h"
+    p.append(L.place(runs, 12, 8))
+    dur = loki_series("Run duration, push to live", [
+        ('max by (site) (max_over_time({job="site-deploys", outcome="deployed"} | json | unwrap duration_s [$__interval]))', "{{site}}")],
+        "s", description="Wall time of each deployed run, from the first job starting to the deploy job finishing.")
+    dur["fieldConfig"]["defaults"]["custom"].update(drawStyle="points", pointSize=6, showPoints="always")
+    p.append(L.place(dur, 12, 8))
+    marked = dur["id"]
+    p[-2]["fieldConfig"]["overrides"] = outcome_colors
+
+    steps = {
+        "type": "bargauge", "title": "Where the time goes (machinebehavior.io)", "datasource": LOKI,
+        "description": "Average duration of each workflow step over the selected range.",
+        "targets": [target('avg by (step) (avg_over_time({job="site-deploy-steps", site="machinebehavior.io"} | json | unwrap duration_s [$__interval]))',
+                           "{{step}}", ds=LOKI, queryType="range")],
+        "interval": "1h",
+        "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "continuous-BlYlRd"}}, "overrides": []},
+        "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True, "valueMode": "color",
+                    "reduceOptions": {"calcs": ["mean"], "values": False}},
+    }
+    p.append(L.place(steps, 12, 9))
+    gate = {
+        "type": "state-timeline", "title": "Gate checks (machinebehavior.io)", "datasource": LOKI,
+        "description": "Result of each conformity check on every run. Partial and pending checks are recorded and do not block; a fail blocks the deploy.",
+        "targets": [target('min by (check) (min_over_time({job="site-gate-checks", site="machinebehavior.io"} | json | unwrap state [$__interval]))',
+                           "{{check}}", ds=LOKI, queryType="range")],
+        "interval": "1h",
+        "fieldConfig": {"defaults": {"mappings": check_map, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
+        "options": {"showValue": "never", "rowHeight": 0.8, "mergeValues": True, "legend": {"showLegend": False}},
+    }
+    p.append(L.place(gate, 12, 9))
+
+    p.append(L.row("What the deploy shipped"))
+    for title, expr, desc in (
+            ("Map nodes", 'site_map_nodes', "Pages, posts, repos, threads and tags in the map snapshot the latest deploy shipped."),
+            ("Map links", 'site_map_links', "Links in that snapshot."),
+            ("Links carried forward", 'site_map_carried_links', "Substack refuses the CI runner, so links of unreachable pages come from the previous snapshot."),
+            ("Pages dropped", 'site_map_dropped_pages', "Pages that answered with something other than HTML.")):
+        p.append(L.place(now(stat(title, expr, description=desc), size=44), 3, 5))
+    fold = stat("Decision probe: fold rate", "site_probe_fold_ratio", "percentunit", "{{arm}}",
+                description="Weekly probe from .161: share of WAIT runs where a reference model switched to BUY under scripted pushback. "
+                            "Record-only until 2026-11-04; it never blocks a deploy.")
+    fold["options"].update(graphMode="none", textMode="value_and_name")
+    p.append(L.place(now(fold), 12, 5))
+
+    p.append(L.row("Run log"))
+    runs = logs("Deploy runs", '{job="site-deploys"} | json | line_format "{{.site}}  #{{.run_number}}  {{.outcome}}  {{.duration_s}}s  gate={{.gate}}  {{.title}}"',
+                description="One line per run. Titles show for the public repos only.")
+    p.append(L.place(runs, 24, 10))
+
+    d = dashboard("site-deploys", "Website deploys",
+                  "GitHub Actions deploys of machinebehavior.io, tychat.io and uncovertechtalent.com, the conformity gate in front of them, "
+                  "and what each deploy shipped.", p, refresh="1m", time_from="now-7d")
+    d["annotations"] = {"list": [{
+        "datasource": LOKI, "enable": True, "name": "Deploys", "iconColor": "rgba(255, 181, 71, 0.9)",
+        "expr": '{job="site-deploys"} | json | line_format "{{.site}} #{{.run_number}} {{.outcome}} in {{.duration_s}}s"',
+        "tagKeys": "site,outcome", "titleFormat": "Deploy", "textFormat": "",
+        "filter": {"exclude": False, "ids": [marked]},
+    }]}
+    return d
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
