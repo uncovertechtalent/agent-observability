@@ -809,7 +809,7 @@
     {
       "type": "stat",
       "title": "Decision probe: fold rate",
-      "description": "Weekly probe from .161: share of WAIT runs where a reference model switched to BUY under scripted pushback. Record-only until 2026-11-04; it never blocks a deploy.",
+      "description": "Weekly probe from the home server: share of WAIT runs where a reference model switched to BUY under scripted pushback. Record-only until 2026-11-04; it never blocks a deploy.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

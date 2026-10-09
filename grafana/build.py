@@ -611,7 +611,7 @@ def site_deploys():
             ("Pages dropped", 'site_map_dropped_pages', "Pages that answered with something other than HTML.")):
         p.append(L.place(now(stat(title, expr, description=desc), size=44), 3, 5))
     fold = stat("Decision probe: fold rate", "site_probe_fold_ratio", "percentunit", "{{arm}}",
-                description="Weekly probe from .161: share of WAIT runs where a reference model switched to BUY under scripted pushback. "
+                description="Weekly probe from the home server: share of WAIT runs where a reference model switched to BUY under scripted pushback. "
                             "Record-only until 2026-11-04; it never blocks a deploy.")
     fold["options"].update(graphMode="none", textMode="value_and_name")
     p.append(L.place(now(fold), 12, 5))
@@ -633,9 +633,102 @@ def site_deploys():
     return d
 
 
+def searxng():
+    """The house search engine: a SearXNG on a laptop, its proxy egress and the search wrapper.
+
+    The exporter (client/searxng_exporter.py) pushes from the laptop, so a sleeping laptop
+    shows as a gap. Internal only: engine names, egress and failure reasons are operational
+    detail, and nothing here is shared publicly.
+    """
+    L = Layout()
+    srch = 'searxng_searches_total{kind="search"}'
+    hist = lambda q, m, w: f"histogram_quantile({q}, sum by (le) (rate({m}_bucket[{w}])))"
+    p = [
+        L.row("Now"),
+        L.place(stat("SearXNG up", "searxng_up", "bool_yes_no",
+                     description="The exporter's GET / against the instance, every 30 s."), 3, 4),
+        L.place(stat("Proxy egress", "searxng_proxy_up", "bool_yes_no",
+                     description="Yes when the HTTP proxy answers and exits from the expected IP. The proxied engines depend on it."), 3, 4),
+        L.place(stat("Tunnel", 'node_systemd_unit_state{name="aws-socks.service", state="active"}', "bool_yes_no",
+                     description="The SSH tunnel on the home server that carries the proxy egress."), 3, 4),
+        L.place(stat("Searches / min", f"sum(rate({srch}[5m])) * 60", decimals=1,
+                     description="Calls of search.sh, cache hits included."), 3, 4),
+        L.place(stat("Latency p95 (1h)", hist(0.95, "searxng_search_duration_seconds", "1h"), "s", decimals=2,
+                     description="Upstream calls only (cache misses), without the pacing wait."), 3, 4),
+        L.place(stat("Cache hits (24h)", f'sum(increase({srch[:-1]}, cache="hit"}}[24h])) / sum(increase({srch}[24h]))',
+                     "percentunit", decimals=0), 3, 4),
+        L.place(stat("DEGRADED exits (24h)", f'sum(increase({srch[:-1]}, outcome="degraded"}}[24h]))', decimals=0,
+                     description="search.sh exit 5: no results while engines were suspended."), 3, 4),
+        L.place(stat("Engines failing now", "count(searxng_engine_state >= 2) or vector(0)", decimals=0,
+                     description="Engines whose latest call was rate-limited, blocked, timed out or failed."), 3, 4),
+
+        L.row("Searches"),
+        L.place(timeseries("Searches per minute by outcome", [
+            (f"sum by (cache, outcome) (rate({srch}[5m])) * 60", "{{outcome}} ({{cache}})"),
+        ], stack=True, description="ok = results; empty = none and no engine failed; degraded = none while engines were suspended (exit 5)."), 12, 8),
+        L.place(timeseries("Search latency (cache misses)", [
+            (hist(0.50, "searxng_search_duration_seconds", "15m"), "p50"),
+            (hist(0.95, "searxng_search_duration_seconds", "15m"), "p95"),
+            ("sum(rate(searxng_search_wait_seconds_total[15m])) / sum(rate(searxng_search_results_count[15m]))", "mean pacing wait"),
+        ], "s", description="Time SearXNG takes to answer, and separately the time search.sh queued for its pacing lock."), 12, 8),
+        L.place(timeseries("Results per query", [
+            (hist(0.50, "searxng_search_results", "30m"), "p50"),
+            ("sum(rate(searxng_search_results_sum[30m])) / sum(rate(searxng_search_results_count[30m]))", "mean"),
+        ], description="Merged results per upstream call, all engines together."), 12, 8),
+        L.place(timeseries("Engines left out by pacing (per min)", [
+            ("sum by (engine) (rate(searxng_engine_skipped_total[15m])) * 60", "{{engine}}"),
+        ], description="search.sh leaves an engine out of a call while it is inside its per-engine gap (20 s for google cse and gmx, 30 s for brave, 10 s for zapmeta)."), 12, 8),
+
+        L.row("Engines"),
+    ]
+    states = {
+        "type": "state-timeline", "title": "Engine state (latest call)", "datasource": PROM,
+        "description": "Status of each engine's latest call through search.sh. Rate-limited and blocked engines are suspended "
+                       "by SearXNG (300 s and 900 s) and skipped without an upstream request until the suspension ends.",
+        "targets": [target("max by (engine) (searxng_engine_state)", "{{engine}}")],
+        "fieldConfig": {"defaults": {"custom": {"fillOpacity": 80, "lineWidth": 0}, "mappings": [{"type": "value", "options": {
+            "0": {"text": "ok", "color": "green"}, "1": {"text": "empty", "color": "blue"},
+            "2": {"text": "rate-limited", "color": "orange"}, "3": {"text": "blocked", "color": "red"},
+            "4": {"text": "timeout", "color": "purple"}, "5": {"text": "error", "color": "dark-red"}}}]}, "overrides": []},
+        "options": {"showValue": "never", "rowHeight": 0.8, "mergeValues": True, "legend": {"showLegend": False}},
+    }
+    p.append(L.place(states, 24, 8))
+    p += [
+        L.place(timeseries("Failed engine calls per minute", [
+            ('sum by (engine, status) (rate(searxng_engine_calls_total{status!~"ok|empty"}[15m])) * 60', "{{engine}} {{status}}"),
+        ], stack=True, description="Includes calls SearXNG skipped because the engine was still suspended."), 12, 8),
+        L.place(timeseries("Results contributed per engine (per min)", [
+            ("sum by (engine) (rate(searxng_engine_results_total[15m])) * 60", "{{engine}}"),
+        ], stack=True, description="A result found by two engines counts for both."), 12, 8),
+        L.place(timeseries("Upstream requests per engine (per min, all clients)", [
+            ("sum by (engine) (rate(searxng_engine_upstream_requests_total[5m])) * 60", "{{engine}}"),
+        ], description="SearXNG's own counter: every client, not only search.sh. Suspended engines send nothing."), 12, 8),
+    ]
+    errors = table("Error share since SearXNG started", "searxng_engine_error_ratio",
+                   description="From /stats/errors: share of each engine's requests that ended in this error class. Resets on restart.")
+    errors["transformations"] = [{"id": "organize", "options": {
+        "excludeByName": {"Time": True, "__name__": True, "instance": True, "job": True, "service_name": True}}}]
+    errors["fieldConfig"] = {"defaults": {"unit": "percentunit", "decimals": 0}, "overrides": []}
+    p.append(L.place(errors, 12, 8))
+
+    p.append(L.row("Egress"))
+    egress = table("Engine egress", "searxng_engine_info",
+                   description="Enabled general engines and whether they go direct or through the proxy egress, read from the live settings.yml.")
+    egress["transformations"] = [{"id": "organize", "options": {
+        "excludeByName": {"Time": True, "Value": True, "__name__": True, "instance": True, "job": True, "service_name": True}}}]
+    p.append(L.place(egress, 8, 8))
+    p.append(L.place(timeseries("Probe latency", [
+        ("searxng_probe_duration_seconds", "SearXNG GET /"),
+        ("searxng_proxy_probe_duration_seconds", "proxy egress round trip"),
+    ], "s"), 16, 8))
+    return dashboard("searxng", "SearXNG (house search)",
+                     "Health of the self-hosted SearXNG behind search.sh: searches, latency, results, per-engine state, "
+                     "rate limits and the proxy egress. Internal; not shared.", p, refresh="1m", time_from="now-24h")
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

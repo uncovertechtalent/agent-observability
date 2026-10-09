@@ -60,3 +60,49 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: Claude Code spend is above $20 per hour.
+
+  # SearXNG, the house search engine. Its exporter pushes from the laptop that runs it, so
+  # a sleeping laptop leaves gaps, not zeros: the rules read pushed values and rates with a
+  # traffic floor, never up{} or absent().
+  - name: searxng
+    rules:
+      - alert: SearXNGDown
+        expr: searxng_up == 0
+        for: 3m
+        labels: {severity: page}
+        annotations:
+          summary: SearXNG does not answer; search.sh fails closed with SEARXNG_DOWN.
+      - alert: SearXNGProxyEgressDown
+        expr: searxng_proxy_up == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: The proxy egress fails or exits from the wrong IP; the proxied engines return nothing.
+      - alert: SearXNGTunnelDown
+        expr: node_systemd_unit_state{name="aws-socks.service", state="active"} == 0
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: The SSH tunnel behind the proxy egress is not active on the home server.
+      - alert: SearXNGEngineFailing
+        expr: |
+          sum by (engine) (increase(searxng_engine_calls_total{status=~"rate_limited|blocked|timeout|error"}[30m]))
+          / sum by (engine) (increase(searxng_engine_calls_total[30m])) > 0.8
+          and sum by (engine) (increase(searxng_engine_calls_total[30m])) >= 5
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.engine }} failed over 80% of its calls in the last 30 minutes (rate limit, block, timeout or error)."
+      - alert: SearXNGDegradedSearches
+        expr: sum(increase(searxng_searches_total{kind="search", outcome="degraded"}[15m])) >= 3
+        labels: {severity: ticket}
+        annotations:
+          summary: search.sh returned SEARXNG_DEGRADED (no results, engines suspended) 3 or more times in 15 minutes.
+      - alert: SearXNGSlowSearches
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(searxng_search_duration_seconds_bucket[30m]))) > 8
+          and on() sum(rate(searxng_search_duration_seconds_count[30m])) > 1/300
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: 95th percentile search latency is above 8 s; an engine is hanging until its timeout.

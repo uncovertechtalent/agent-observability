@@ -55,3 +55,72 @@ tests:
       - eval_time: 12m
         alertname: ClaudeCodeSpendSpike
         exp_alerts: []
+
+  # SearXNG answers nothing for 5 minutes: page.
+  - interval: 30s
+    input_series:
+      - series: 'searxng_up{job="searxng-exporter"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SearXNGDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: searxng-exporter}
+            exp_annotations:
+              summary: SearXNG does not answer; search.sh fails closed with SEARXNG_DOWN.
+
+  # Laptop asleep: no samples at all. Nothing fires.
+  - interval: 30s
+    input_series:
+      - series: 'searxng_up{job="searxng-exporter"}'
+        values: '1 1 _x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SearXNGDown
+        exp_alerts: []
+
+  # Brave rate-limited on 10 of 11 calls in 30 minutes: ticket.
+  - interval: 1m
+    input_series:
+      - series: 'searxng_engine_calls_total{engine="brave",status="rate_limited",suspended="true"}'
+        values: '0+0.3x45'
+      - series: 'searxng_engine_calls_total{engine="brave",status="ok",suspended="false"}'
+        values: '0+0.03x45'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: SearXNGEngineFailing
+        exp_alerts:
+          - exp_labels: {severity: ticket, engine: brave}
+            exp_annotations:
+              summary: "brave failed over 80% of its calls in the last 30 minutes (rate limit, block, timeout or error)."
+
+  # Two failed calls and nothing else in 30 minutes: below the traffic floor.
+  - interval: 1m
+    input_series:
+      - series: 'searxng_engine_calls_total{engine="brave",status="rate_limited",suspended="false"}'
+        values: '0 0 1 1 2x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SearXNGEngineFailing
+        exp_alerts: []
+
+  # Three DEGRADED exits within 15 minutes: ticket. One alone does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'searxng_searches_total{kind="search",cache="miss",outcome="degraded"}'
+        values: '0 0 1 1 2 2 3x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SearXNGDegradedSearches
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: search.sh returned SEARXNG_DEGRADED (no results, engines suspended) 3 or more times in 15 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'searxng_searches_total{kind="search",cache="miss",outcome="degraded"}'
+        values: '0 0 1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SearXNGDegradedSearches
+        exp_alerts: []
