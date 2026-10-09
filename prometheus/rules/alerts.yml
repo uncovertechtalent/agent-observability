@@ -54,12 +54,15 @@ groups:
     rules:
       # model:claude_code_cost_usd:sum1h comes from Loki's ruler (cost of the
       # api_request events in the trailing hour), remote-written to Prometheus.
+      # Threshold from 2026-10-02..10-08 in Loki: median active hour USD 10.59,
+      # p99 of the trailing hour USD 47.71, busiest hour USD 87.41. At USD 40 the
+      # alert fires on busy parallel-session hours, about every other day.
       - alert: ClaudeCodeSpendSpike
-        expr: sum(model:claude_code_cost_usd:sum1h) > 20
+        expr: sum(model:claude_code_cost_usd:sum1h) > 40
         for: 10m
         labels: {severity: ticket}
         annotations:
-          summary: Claude Code spend is above $20 per hour.
+          summary: Claude Code spend is above $40 per hour.
 
   # SearXNG, the house search engine. Its exporter pushes from the laptop that runs it, so
   # a sleeping laptop leaves gaps, not zeros: the rules read pushed values and rates with a
