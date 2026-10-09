@@ -739,7 +739,7 @@
     {
       "type": "barchart",
       "title": "Daily spend by service",
-      "description": "Unblended cost per UTC day and service, this month and the three months before. Bedrock carries the evals, EC2 the reverse proxy box, Route 53 the DNS zones; data transfer shows under the service that caused it. The latest days are estimates until Cost Explorer settles them.",
+      "description": "Unblended cost per UTC day and service, this month and the three months before. Domain renewals and monthly tax post as one-day spikes. The latest days are estimates until Cost Explorer settles them.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

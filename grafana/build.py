@@ -891,9 +891,8 @@ def aws_spend():
 
         L.row("Daily spend"),
         L.place(pivot_bars("Daily spend by service", "aws_cost_day_usd", "day", "service",
-                           "Unblended cost per UTC day and service, this month and the three months before. "
-                           "Bedrock carries the evals, EC2 the reverse proxy box, Route 53 the DNS zones; data transfer "
-                           "shows under the service that caused it. The latest days are estimates until Cost Explorer settles them."), 24, 10),
+                           "Unblended cost per UTC day and service, this month and the three months before. Domain renewals "
+                           "and monthly tax post as one-day spikes. The latest days are estimates until Cost Explorer settles them."), 24, 10),
 
         L.row("Services and months"),
     ]
