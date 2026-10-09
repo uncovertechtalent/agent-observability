@@ -110,7 +110,7 @@ groups:
         annotations:
           summary: 95th percentile search latency is above 8 s; an engine is hanging until its timeout.
 
-  # AWS spend from aws-cost-exporter: Cost Explorer every 6 h, AWS Budgets for the budget.
+  # AWS spend from aws-cost-exporter: Cost Explorer every 12 h (forecast daily), AWS Budgets every 6 h.
   # The budget is the MONTHLY budget in AWS Budgets; without one, the budget rules stay quiet.
   # Cost Explorer lags by up to a day, so "latest day" is yesterday at best, and may be partial.
   - name: aws_cost
@@ -136,7 +136,7 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: The latest day's AWS spend is more than twice the 28-day median.
-      # Two missed 6-hour polls, or a running exporter that has never fetched.
+      # 13 hours of failing polls (one missed 12-hour fetch), or a running exporter that has never fetched.
       - alert: AWSCostExporterStale
         expr: |
           time() - max(aws_cost_exporter_last_success_timestamp_seconds) > 13 * 3600

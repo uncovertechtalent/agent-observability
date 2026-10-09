@@ -184,7 +184,7 @@
     {
       "type": "stat",
       "title": "Forecast, month end",
-      "description": "Days before today plus Cost Explorer's forecast from today to the end of the month.",
+      "description": "Actual days before the forecast's start plus Cost Explorer's forecast to the end of the month (forecast fetched daily).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -482,7 +482,7 @@
     {
       "type": "stat",
       "title": "Data age",
-      "description": "Time since the exporter last asked Cost Explorer for this month (every 6 h).",
+      "description": "Time since the exporter last asked Cost Explorer for this month (every 12 h).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -512,11 +512,11 @@
               },
               {
                 "color": "orange",
-                "value": 25200
+                "value": 46800
               },
               {
                 "color": "red",
-                "value": 46800
+                "value": 90000
               }
             ]
           }

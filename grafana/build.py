@@ -825,7 +825,7 @@ def aws_spend():
     """AWS account spend from Cost Explorer and AWS Budgets (aws-cost-exporter).
 
     Internal only: the panels show real spend and are never shared publicly. The exporter
-    fetches every 6 hours and Cost Explorer lags by up to a day, so this dashboard moves
+    fetches this month every 12 hours and Cost Explorer lags by up to a day, so this dashboard moves
     a few times a day. Day, month and service are labels on instant series, so the daily
     and monthly charts are instant queries pivoted with groupingToMatrix.
     """
@@ -863,7 +863,7 @@ def aws_spend():
         L.place(ratio_gauge("Month to date / budget", f"max(aws_cost_mtd_usd) / {budget}",
                             "Orange at 80% (AWSCostMonthToDateOver80), red at 100%."), 4, 5),
         L.place(stat("Forecast, month end", "max(aws_cost_month_forecast_usd)", usd, decimals=2,
-                     description="Days before today plus Cost Explorer's forecast from today to the end of the month."), 4, 5),
+                     description="Actual days before the forecast's start plus Cost Explorer's forecast to the end of the month (forecast fetched daily)."), 4, 5),
         L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
                             "Red above 100% (AWSCostForecastOverBudget)."), 4, 5),
         L.place(stat("AWS Budgets forecast", "max(aws_budget_forecast_usd)", usd, decimals=2,
@@ -876,7 +876,7 @@ def aws_spend():
                      description="May be partial: Cost Explorer marks recent days as estimated."), 4, 4),
         L.place(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no"), 4, 4),
         L.place(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
-                     description="Time since the exporter last asked Cost Explorer for this month (every 6 h)."), 4, 4),
+                     description="Time since the exporter last asked Cost Explorer for this month (every 12 h)."), 4, 4),
         L.place(stat("Cost Explorer API cost", "max(aws_cost_explorer_spend_usd_total)", usd, decimals=2,
                      description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started."), 4, 4),
         L.place(stat("Exporter errors", "max(aws_cost_exporter_errors_total)", decimals=0,
@@ -932,7 +932,7 @@ def aws_spend():
                "fieldConfig": {"defaults": {"unit": usd, "decimals": 2}, "overrides": []},
                "options": {"showHeader": True}}
     p.append(L.place(budgets, 12, 8))
-    steps = {"Data age": [("green", None), ("orange", 7 * 3600), ("red", 13 * 3600)],
+    steps = {"Data age": [("green", None), ("orange", 13 * 3600), ("red", 25 * 3600)],
              "Latest day / 28-day median": [("green", None), ("orange", 1.5), ("red", 2)],
              "Exporter errors": [("green", None), ("red", 1)]}
     for panel in p:  # current-value panels read the latest sample; a 30-day range step would skip a young series

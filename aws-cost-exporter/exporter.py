@@ -3,13 +3,14 @@
 Cost Explorer bills USD 0.01 per request, so the exporter asks rarely and caches every
 answer in /data/cache.json. A restart reads the cache and asks again only when the
 cached part is due:
-  - every POLL_SECONDS (default 6 h): this month's daily cost by service, and the
-    Cost Explorer forecast for the rest of the month
-  - every HISTORY_SECONDS (default 24 h), and at each new month: daily cost by service
+  - every POLL_SECONDS (default 12 h), and at each new month: this month's daily cost by service
+  - every FORECAST_SECONDS (default 24 h): Cost Explorer's forecast for the rest of the month
+  - every HISTORY_SECONDS (default 7 days), and at each new month: daily cost by service
     for the three months before this one
-  - every POLL_SECONDS: AWS Budgets (no charge per request)
-Requests are counted per API and kept in the cache, so aws_cost_explorer_spend_usd_total
-shows what the exporter itself has cost.
+  - every BUDGETS_SECONDS (default 6 h): AWS Budgets (no charge per request)
+That is about 3.3 Cost Explorer requests a day, some USD 1 a month. Cost Explorer itself
+refreshes a few times a day. Requests are counted per API and kept in the cache, so
+aws_cost_explorer_spend_usd_total shows what the exporter itself has cost.
 
 Credentials come from the host's AWS shared config, mounted read-only (AWS_PROFILE picks
 the profile). The metrics carry real spend: the dashboard is internal and never shared.
@@ -28,8 +29,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import boto3
 
 CACHE_FILE = os.environ.get("CACHE_FILE", "/data/cache.json")
-POLL = int(os.environ.get("POLL_SECONDS", str(6 * 3600)))
-HISTORY = int(os.environ.get("HISTORY_SECONDS", str(24 * 3600)))
+POLL = int(os.environ.get("POLL_SECONDS", str(12 * 3600)))
+FORECAST = int(os.environ.get("FORECAST_SECONDS", str(24 * 3600)))
+HISTORY = int(os.environ.get("HISTORY_SECONDS", str(7 * 86400)))
+BUDGETS = int(os.environ.get("BUDGETS_SECONDS", str(6 * 3600)))
 HISTORY_MONTHS = int(os.environ.get("HISTORY_MONTHS", "3"))
 MEDIAN_DAYS = int(os.environ.get("MEDIAN_DAYS", "28"))
 # Charges that post once a period (domain renewals, monthly tax) stay out of the spike baseline.
@@ -95,6 +98,10 @@ def fetch(ce, budgets, account):
     if cur.get("month") != this_month.isoformat() or now - cur.get("fetched", 0) >= POLL:
         days, est, unit = daily_by_service(ce, this_month, today + timedelta(days=1))
         cache["current"] = {"month": this_month.isoformat(), "fetched": now, "days": days, "estimated": est, "unit": unit}
+        log(f"current month: {len(days)} days, estimated {est}")
+
+    fc = cache.get("forecast", {})
+    if fc.get("end") != following.isoformat() or now - fc.get("fetched", 0) >= FORECAST:
         fc = {"fetched": now, "amount": None, "start": today.isoformat(), "end": following.isoformat()}
         try:
             r = ce.get_cost_forecast(TimePeriod={"Start": today.isoformat(), "End": following.isoformat()},
@@ -105,7 +112,6 @@ def fetch(ce, budgets, account):
         finally:
             count("ce:GetCostForecast")
         cache["forecast"] = fc
-        log(f"current month: {len(days)} days, estimated {est}")
 
     hist = cache.get("history", {})
     if hist.get("start") != hist_start.isoformat() or hist.get("end") != this_month.isoformat() \
@@ -115,7 +121,7 @@ def fetch(ce, budgets, account):
                             "days": days, "estimated": est, "unit": unit}
         log(f"history: {len(days)} days from {hist_start}")
 
-    if now - cache.get("budgets", {}).get("fetched", 0) >= POLL:
+    if now - cache.get("budgets", {}).get("fetched", 0) >= BUDGETS:
         out, token = [], None
         while True:
             args = {"AccountId": account}
@@ -192,8 +198,9 @@ def render():
             month_tot[d[:7]] = month_tot.get(d[:7], 0.0) + totals[d]
         this_month = cur.get("month", "")[:7]
         mtd_svc = {svc: v for (mo, svc), v in months.items() if mo == this_month}
-        before_today = sum(t for d, t in totals.items() if d.startswith(this_month) and d < today)
         fc = cache.get("forecast", {})
+        # the forecast covers [fc.start, month end); actual days before its start complete the month
+        before_forecast = sum(t for d, t in totals.items() if d.startswith(this_month) and d < fc.get("start", today))
         usage = {d: sum(v for svc, v in s.items() if svc not in SPIKE_EXCLUDE) for d, s in days.items()}
         complete = sorted(d for d in usage if d < today)
         latest = complete[-1] if complete else None
@@ -212,8 +219,8 @@ def render():
         m("aws_cost_mtd_by_service_usd", "gauge", "This month to date by service.",
           [({"service": svc}, round(v, 6)) for svc, v in sorted(mtd_svc.items()) if abs(v) >= 1e-6])
         m("aws_cost_month_forecast_usd", "gauge",
-          "Month-end forecast: days before today plus Cost Explorer's forecast from today to month end.",
-          [({}, round(before_today + fc["amount"], 6))] if fc.get("amount") is not None else [])
+          "Month-end forecast: actual days before the forecast's start plus Cost Explorer's forecast to month end.",
+          [({}, round(before_forecast + fc["amount"], 6))] if fc.get("amount") is not None and fc.get("start", "")[:7] == this_month else [])
         m("aws_cost_latest_day_usd", "gauge", "Cost of the latest UTC day before today without SPIKE_EXCLUDE services (may be partial).",
           [({}, round(usage[latest], 6))] if latest else [])
         m("aws_cost_latest_day_estimated", "gauge", "1 when Cost Explorer marks the latest day as estimated.",
@@ -234,7 +241,7 @@ def render():
           [({}, round(ce_n * CE_PRICE, 2))])
         m("aws_cost_exporter_fetch_timestamp_seconds", "gauge", "When each part was last fetched.",
           [({"part": k}, cache[k]["fetched"]) for k in ("current", "forecast", "history", "budgets") if k in cache])
-        m("aws_cost_exporter_last_success_timestamp_seconds", "gauge", "Last poll in which every due part was fetched.",
+        m("aws_cost_exporter_last_success_timestamp_seconds", "gauge", "Last poll loop (every 5 min) that ended without an error.",
           [({}, cache.get("last_success"))])
         m("aws_cost_exporter_errors_total", "counter", "Failed polls, kept across restarts.", [({}, cache.get("errors", 0))])
         unit = cur.get("unit") or hist.get("unit")

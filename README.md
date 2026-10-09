@@ -8,7 +8,7 @@ Five sources feed it:
 - **Ollama**, through a small metering proxy that turns each inference call into Prometheus metrics named after the OpenTelemetry GenAI conventions: time to first token, decode speed, token counts, model load time, resident models and their VRAM split.
 
 - **Website deploys**, through a small exporter that reads the GitHub Actions runs of three sites (machinebehavior.io, tychat.io, uncovertechtalent.com): every run, its steps, the conformity gate's verdict per check, and what the deploy shipped.
-- **AWS spend**, through an exporter that reads Cost Explorer and AWS Budgets: daily cost by service for this month and the three before, the month-end forecast and the monthly budget. Cost Explorer bills USD 0.01 per request, so the exporter fetches every 6 hours (history once a day), caches every answer and counts its own requests. The dashboard shows real spend and stays internal.
+- **AWS spend**, through an exporter that reads Cost Explorer and AWS Budgets: daily cost by service for this month and the three before, the month-end forecast and the monthly budget. Cost Explorer bills USD 0.01 per request, so the exporter fetches this month every 12 hours, the forecast daily and the history weekly (about USD 1 a month), caches every answer and counts its own requests. The dashboard shows real spend and stays internal.
 - **SearXNG**, the self-hosted search engine the agents search through, by an exporter on the laptop that runs it: whether it answers, searches per minute, latency, results per query, cache hits, each engine's rate limits and blocks, and whether its proxy egress exits from the right IP.
 
 Everything runs from one `docker compose up`. Dashboards, rules and alerts live in the repo as code.
