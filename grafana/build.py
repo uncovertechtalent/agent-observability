@@ -6,6 +6,7 @@ repo stays the source of truth and UI edits cannot drift from it.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 OUT = Path(__file__).parent / "dashboards"
@@ -385,6 +386,52 @@ CC_EVENTS = '{service_name=~"claude-code.*"}'
 CC_REQUESTS = CC_EVENTS + ' | event_name="api_request"'
 CC_TOKENS = (("input_tokens", "input"), ("output_tokens", "output"),
              ("cache_read_tokens", "cacheRead"), ("cache_creation_tokens", "cacheCreation"))
+# Threshold of the ClaudeCodeSpendSpike alert (prometheus/rules/alerts.yml); keep the two in step.
+CC_SPEND_ALERT_USD = 40
+# When Prometheus loaded the rule with that threshold. Earlier ALERTS samples come from older
+# rules (USD 20, and before 2026-10-09 07:27 UTC the inflated counters), so the panel replays
+# the current rule before this point. Move it whenever the threshold or the input changes.
+CC_SPEND_ALERT_SINCE = int(datetime(2026, 10, 9, 11, 0, 21, tzinfo=timezone.utc).timestamp())
+
+
+def spend_alert_state():
+    """State of ClaudeCodeSpendSpike as one row: 0 below the threshold, 1 pending, 2 firing.
+
+    No Alertmanager runs, and public dashboards drop data-source annotations (the
+    public annotations endpoint returns none), so the alert shows as a panel.
+    From CC_SPEND_ALERT_SINCE the row is the alert's own ALERTS series. Before it, the
+    row replays the rule on the recorded hourly cost: pending above the threshold,
+    firing once the last 10 minutes all were. The recorded cost starts 2026-10-09
+    07:29 UTC; earlier ranges show no data. max_over_time over the step keeps short
+    pending spells visible on long ranges.
+    """
+    alerts = 'ALERTS{alertname="ClaudeCodeSpendSpike", alertstate="%s"}'
+    cost = "sum(model:claude_code_cost_usd:sum1h)"
+    live = f"(max(2 * {alerts % 'firing'} or {alerts % 'pending'}) or vector(0))"
+    replay = f"(({cost} > bool {CC_SPEND_ALERT_USD}) + (min_over_time({cost}[10m:1m]) > bool {CC_SPEND_ALERT_USD}))"
+    now = (f"({live} and on() (vector(time()) >= {CC_SPEND_ALERT_SINCE})) "
+           f"or ({replay} and on() (vector(time()) < {CC_SPEND_ALERT_SINCE}))")
+    expr = f"max_over_time(({now})[$__interval:1m])"
+    states = (("below USD %d" % CC_SPEND_ALERT_USD, "green"), ("pending", "yellow"), ("firing", "red"))
+    return {
+        "type": "state-timeline", "datasource": PROM, "interval": "1m",
+        "title": f"Spend alert: trailing hour above USD {CC_SPEND_ALERT_USD}",
+        "description": f"The ClaudeCodeSpendSpike Prometheus alert. Pending once the cost of the trailing hour, all models "
+                       f"together, passes USD {CC_SPEND_ALERT_USD}; firing after 10 minutes above it. Before the rule went "
+                       f"live on 2026-10-09 at 11:00 UTC the row replays it on the recorded hourly cost, which starts "
+                       f"at 07:29 UTC that day.",
+        "targets": [target(expr, "ClaudeCodeSpendSpike")],
+        # Colours come from the value mappings; with threshold colours the legend lists "< 1", "1+", "2+".
+        "fieldConfig": {"defaults": {
+            "color": {"mode": "fixed", "fixedColor": "green"},
+            "mappings": [{"type": "value", "options": {
+                str(i): {"text": t, "color": c, "index": i} for i, (t, c) in enumerate(states)}}],
+            "custom": {"fillOpacity": 80, "lineWidth": 0},
+        }, "overrides": []},
+        "options": {"showValue": "never", "mergeValues": True, "alignValue": "left", "rowHeight": 0.8,
+                    "legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"},
+                    "tooltip": {"mode": "single"}},
+    }
 
 
 def request_sum(field, window, by=(), where=""):
@@ -412,6 +459,16 @@ def claude_code():
     r = "$__range"
     cache_share = (f"{request_sum('cache_read_tokens', r)} / ({request_sum('input_tokens', r)} + "
                    f"{request_sum('cache_read_tokens', r)} + {request_sum('cache_creation_tokens', r)})")
+    cost_hour = loki_series("Cost per hour by model", [
+        (request_sum("cost_usd", "1h", ("model",)), "{{model}}"),
+    ], "currencyUSD", stack=True,
+        description=f"Cost of the API calls in the trailing hour. The red line is the USD {CC_SPEND_ALERT_USD} threshold "
+                    "of the spend alert; the stacked total is what the alert reads.")
+    # Threshold line and band above it; the soft max keeps the line on screen on quiet days.
+    cost_hour["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+        {"color": "transparent", "value": None}, {"color": "red", "value": CC_SPEND_ALERT_USD}]}
+    cost_hour["fieldConfig"]["defaults"]["custom"].update(
+        thresholdsStyle={"mode": "dashed+area"}, axisSoftMax=CC_SPEND_ALERT_USD * 1.25)
     p = [
         L.row("Spend and volume"),
         L.place(stat("Cost (range)", request_sum("cost_usd", r), "currencyUSD", decimals=2, ds=LOKI,
@@ -424,9 +481,8 @@ def claude_code():
         L.place(stat("Prompts (range)", f'sum(count_over_time({ev} | event_name="user_prompt" [{r}]))', decimals=0, ds=LOKI), 4, 4),
         L.place(stat("Tool calls (range)", f'sum(count_over_time({ev} | event_name="tool_result" [{r}]))', decimals=0, ds=LOKI), 4, 4),
 
-        L.place(loki_series("Cost per hour by model", [
-            (request_sum("cost_usd", "1h", ("model",)), "{{model}}"),
-        ], "currencyUSD", stack=True, description="Cost of the API calls in the trailing hour."), 12, 8),
+        L.place(spend_alert_state(), 24, 4),
+        L.place(cost_hour, 12, 8),
         L.place(loki_series("Tokens / s by type", [
             (f"sum(rate({CC_REQUESTS} | keep {f} | unwrap {f} [5m]))", name) for f, name in CC_TOKENS
         ], stack=True, description="cacheRead dominating is healthy: long sessions re-read their context cheaply."), 12, 8),
