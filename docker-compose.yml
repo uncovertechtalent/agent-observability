@@ -77,12 +77,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
-      # LAN viewers need no login. Only Caddy's public paths reach this box from outside.
+      # LAN viewers need no login. Only the public reverse proxy's allowed paths reach this box from outside.
       - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANONYMOUS:-true}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_ANALYTICS_REPORTING_ENABLED=false
       # Public dashboards are framed on machinebehavior.io/inside/. Only the public paths pass the
-      # AWS front door, so the login and admin pages stay unreachable from outside either way.
+      # public reverse proxy, so the login and admin pages stay unreachable from outside either way.
       - GF_SECURITY_ALLOW_EMBEDDING=true
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
