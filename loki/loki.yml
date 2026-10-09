@@ -33,6 +33,23 @@ limits_config:
   # Claude Code events carry many attributes; keep them as structured
   # metadata, promote only service.name to a stream label (the default).
 
+# Recording rules over events, written to Prometheus. Claude Code's hourly cost
+# for the spend alert comes from here (rules/fake/claude-code.yml; "fake" is the
+# tenant when auth is off).
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /loki/ruler-scratch
+  wal:
+    dir: /loki/ruler-wal
+  remote_write:
+    enabled: true
+    clients:
+      prometheus:
+        url: http://prometheus:9090/api/v1/write
+
 compactor:
   working_directory: /loki/compactor
   retention_enabled: true

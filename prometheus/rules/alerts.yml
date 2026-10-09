@@ -52,8 +52,10 @@ groups:
 
   - name: claude_code_spend
     rules:
+      # model:claude_code_cost_usd:sum1h comes from Loki's ruler (cost of the
+      # api_request events in the trailing hour), remote-written to Prometheus.
       - alert: ClaudeCodeSpendSpike
-        expr: sum(model:claude_code_cost_usd:rate1h) > 20
+        expr: sum(model:claude_code_cost_usd:sum1h) > 20
         for: 10m
         labels: {severity: ticket}
         annotations:

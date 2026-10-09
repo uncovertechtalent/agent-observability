@@ -43,17 +43,7 @@ groups:
       - record: sli:gen_ai_ttft_slow:ratio_rate6h
         expr: 1 - sum(rate(gen_ai_server_time_to_first_token_seconds_bucket{gen_ai_operation_name="chat",le="4.0"}[6h])) / sum(rate(gen_ai_server_time_to_first_token_seconds_count{gen_ai_operation_name="chat"}[6h]))
 
-  - name: claude_code
-    interval: 1m
-    rules:
-      - record: model:claude_code_cost_usd:rate1h
-        expr: sum by (model) (increase(claude_code_cost_usage_USD_total[1h]))
-      - record: type:claude_code_tokens:rate5m
-        expr: sum by (type, model) (rate(claude_code_token_usage_tokens_total[5m]))
-      # Share of input served from the prompt cache. Low values mean context
-      # churn: compaction, reordered system prompts, or cold sessions.
-      - record: claude_code_cache_read:ratio_rate1h
-        expr: |
-          sum(increase(claude_code_token_usage_tokens_total{type="cacheRead"}[1h]))
-          /
-          sum(increase(claude_code_token_usage_tokens_total{type=~"input|cacheRead|cacheCreation"}[1h]))
+  # Claude Code: no rules here. Its counters are not summable in Prometheus
+  # (parallel processes share one series identity; see the README). Loki's
+  # ruler records hourly cost from the per-request events instead and writes
+  # model:claude_code_cost_usd:sum1h here: loki/rules/fake/claude-code.yml.

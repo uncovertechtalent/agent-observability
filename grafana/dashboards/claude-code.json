@@ -1,7 +1,7 @@
 {
   "uid": "claude-code",
   "title": "Claude Code agents",
-  "description": "Spend, tokens, tools and traces from Claude Code's OpenTelemetry export.",
+  "description": "Spend, tokens, tools and traces from Claude Code's OpenTelemetry export. Spend and tokens are summed from one event per API call.",
   "tags": [
     "agent-observability"
   ],
@@ -34,19 +34,20 @@
     {
       "type": "stat",
       "title": "Cost (range)",
-      "description": "",
+      "description": "Sum of cost_usd over every API call in the range, as Claude Code prices it.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
-          "refId": "A"
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -76,19 +77,20 @@
     {
       "type": "stat",
       "title": "Tokens (range)",
-      "description": "",
+      "description": "Input, output, cache read and cache write tokens of every API call in the range.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total[$__range]))",
-          "refId": "A"
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep output_tokens | unwrap output_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -116,20 +118,21 @@
     },
     {
       "type": "stat",
-      "title": "Cache read share (1h)",
+      "title": "Cache read share (range)",
       "description": "Input tokens served from the prompt cache. Drops after compaction or when the system prompt changes.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "claude_code_cache_read:ratio_rate1h",
-          "refId": "A"
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) / (sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__range])))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -158,20 +161,21 @@
     },
     {
       "type": "stat",
-      "title": "Sessions (range)",
+      "title": "API requests (range)",
       "description": "",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_session_count_total[$__range]))",
-          "refId": "A"
+          "expr": "sum(count_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -200,25 +204,27 @@
     },
     {
       "type": "stat",
-      "title": "Active time (range)",
+      "title": "Prompts (range)",
       "description": "",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_active_time_seconds_total[$__range]))",
-          "refId": "A"
+          "expr": "sum(count_over_time({service_name=~\"claude-code.*\"} | event_name=\"user_prompt\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -241,20 +247,21 @@
     },
     {
       "type": "stat",
-      "title": "Lines changed (range)",
+      "title": "Tool calls (range)",
       "description": "",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_lines_of_code_count_total[$__range]))",
-          "refId": "A"
+          "expr": "sum(count_over_time({service_name=~\"claude-code.*\"} | event_name=\"tool_result\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -284,18 +291,18 @@
     {
       "type": "timeseries",
       "title": "Cost per hour by model",
-      "description": "",
+      "description": "Cost of the API calls in the trailing hour.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "model:claude_code_cost_usd:rate1h",
+          "expr": "sum by (model) (sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep model, cost_usd | unwrap cost_usd [1h]))",
           "refId": "A",
           "legendFormat": "{{model}}"
         }
@@ -341,18 +348,45 @@
       "title": "Tokens / s by type",
       "description": "cacheRead dominating is healthy: long sessions re-read their context cheaply.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum by (type) (type:claude_code_tokens:rate5m)",
+          "expr": "sum(rate({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [5m]))",
           "refId": "A",
-          "legendFormat": "{{type}}"
+          "legendFormat": "input"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(rate({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep output_tokens | unwrap output_tokens [5m]))",
+          "refId": "B",
+          "legendFormat": "output"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(rate({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [5m]))",
+          "refId": "C",
+          "legendFormat": "cacheRead"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(rate({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [5m]))",
+          "refId": "D",
+          "legendFormat": "cacheCreation"
         }
       ],
       "fieldConfig": {
@@ -394,18 +428,18 @@
     {
       "type": "timeseries",
       "title": "Cost by source (main, subagent, auxiliary)",
-      "description": "Subagent fan-out shows up here first.",
+      "description": "Trailing hour. sdk is the desktop app's main loop, agent:* are subagents, the rest are side calls (prompt suggestions, compaction, web fetch). Subagent fan-out shows up here first.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum by (query_source) (increase(claude_code_cost_usage_USD_total[1h]))",
+          "expr": "sum by (query_source) (sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep query_source, cost_usd | unwrap cost_usd [1h]))",
           "refId": "A",
           "legendFormat": "{{query_source}}"
         }
@@ -449,27 +483,27 @@
     {
       "type": "timeseries",
       "title": "Cost by skill and agent",
-      "description": "",
+      "description": "Trailing hour.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum by (skill_name) (increase(claude_code_cost_usage_USD_total{skill_name!=\"\"}[1h]))",
+          "expr": "sum by (skill_name) (sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | skill_name!=\"\" | keep skill_name, cost_usd | unwrap cost_usd [1h]))",
           "refId": "A",
           "legendFormat": "skill {{skill_name}}"
         },
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum by (agent_name) (increase(claude_code_cost_usage_USD_total{agent_name!=\"\"}[1h]))",
+          "expr": "sum by (agent_name) (sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | agent_name!=\"\" | keep agent_name, cost_usd | unwrap cost_usd [1h]))",
           "refId": "B",
           "legendFormat": "agent {{agent_name}}"
         }

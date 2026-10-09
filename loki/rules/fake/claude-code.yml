@@ -1,0 +1,13 @@
+# Loki ruler: recording rules over Claude Code's events, remote-written to Prometheus.
+groups:
+  - name: claude_code
+    interval: 1m
+    rules:
+      # Cost of the API calls in the trailing hour, by model. One api_request
+      # event per call carries its cost, so the sum is exact. Feeds the
+      # ClaudeCodeSpendSpike alert in prometheus/rules/alerts.yml.
+      - record: model:claude_code_cost_usd:sum1h
+        expr: |
+          sum by (model) (
+            sum_over_time({service_name=~"claude-code.*"} | event_name="api_request" | keep model, cost_usd | unwrap cost_usd [1h])
+          )

@@ -46,10 +46,13 @@ def target(expr, legend="", ds=PROM, ref="A", **extra):
     return t
 
 
-def stat(title, expr, unit="short", legend="", decimals=None, description=""):
+def stat(title, expr, unit="short", legend="", decimals=None, description="", ds=PROM):
+    t = target(expr, legend, ds=ds)
+    if ds is LOKI:
+        t["queryType"] = "instant"
     p = {
-        "type": "stat", "title": title, "description": description, "datasource": PROM,
-        "targets": [target(expr, legend)],
+        "type": "stat", "title": title, "description": description, "datasource": ds,
+        "targets": [t],
         "fieldConfig": {"defaults": {"unit": unit}, "overrides": []},
         "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "graphMode": "area"},
     }
@@ -378,32 +381,64 @@ def host_public():
     return d
 
 
+CC_EVENTS = '{service_name=~"claude-code.*"}'
+CC_REQUESTS = CC_EVENTS + ' | event_name="api_request"'
+CC_TOKENS = (("input_tokens", "input"), ("output_tokens", "output"),
+             ("cache_read_tokens", "cacheRead"), ("cache_creation_tokens", "cacheCreation"))
+
+
+def request_sum(field, window, by=(), where=""):
+    """Sum of one field of Claude Code's api_request events over `window` (LogQL).
+
+    Claude Code writes one api_request event per API call with its cost and token
+    counts, so the sum is exact. `keep` drops every other label before the unwrap;
+    without it each request (request_id, trace_id) would be a series of its own.
+    """
+    sel = CC_REQUESTS + (f" | {where}" if where else "")
+    inner = f"sum_over_time({sel} | keep {', '.join((*by, field))} | unwrap {field} [{window}])"
+    return f"sum by ({', '.join(by)}) ({inner})" if by else f"sum({inner})"
+
+
 def claude_code():
+    """Spend and tokens come from api_request events in Loki, not from Claude Code's counters.
+
+    The desktop app runs many Claude Code processes at once, and without a per-process
+    attribute they all write the same Prometheus series; every interleaved export reads
+    as a counter reset (230,328 resets and USD 1.97M of phantom increase in the week to
+    2026-10-09). See the README, "Cost and tokens from events".
+    """
     L = Layout()
-    ev = '{service_name=~"claude-code.*"}'
+    ev = CC_EVENTS
+    r = "$__range"
+    cache_share = (f"{request_sum('cache_read_tokens', r)} / ({request_sum('input_tokens', r)} + "
+                   f"{request_sum('cache_read_tokens', r)} + {request_sum('cache_creation_tokens', r)})")
     p = [
         L.row("Spend and volume"),
-        L.place(stat("Cost (range)", 'sum(increase(claude_code_cost_usage_USD_total[$__range]))', "currencyUSD", decimals=2), 4, 4),
-        L.place(stat("Tokens (range)", 'sum(increase(claude_code_token_usage_tokens_total[$__range]))', "short"), 4, 4),
-        L.place(stat("Cache read share (1h)", "claude_code_cache_read:ratio_rate1h", "percentunit", decimals=1,
+        L.place(stat("Cost (range)", request_sum("cost_usd", r), "currencyUSD", decimals=2, ds=LOKI,
+                     description="Sum of cost_usd over every API call in the range, as Claude Code prices it."), 4, 4),
+        L.place(stat("Tokens (range)", " + ".join(request_sum(f, r) for f, _ in CC_TOKENS), ds=LOKI,
+                     description="Input, output, cache read and cache write tokens of every API call in the range."), 4, 4),
+        L.place(stat("Cache read share (range)", cache_share, "percentunit", decimals=1, ds=LOKI,
                      description="Input tokens served from the prompt cache. Drops after compaction or when the system prompt changes."), 4, 4),
-        L.place(stat("Sessions (range)", 'sum(increase(claude_code_session_count_total[$__range]))', decimals=0), 4, 4),
-        L.place(stat("Active time (range)", 'sum(increase(claude_code_active_time_seconds_total[$__range]))', "s"), 4, 4),
-        L.place(stat("Lines changed (range)", 'sum(increase(claude_code_lines_of_code_count_total[$__range]))', decimals=0), 4, 4),
+        L.place(stat("API requests (range)", f"sum(count_over_time({CC_REQUESTS} [{r}]))", decimals=0, ds=LOKI), 4, 4),
+        L.place(stat("Prompts (range)", f'sum(count_over_time({ev} | event_name="user_prompt" [{r}]))', decimals=0, ds=LOKI), 4, 4),
+        L.place(stat("Tool calls (range)", f'sum(count_over_time({ev} | event_name="tool_result" [{r}]))', decimals=0, ds=LOKI), 4, 4),
 
-        L.place(timeseries("Cost per hour by model", [
-            ("model:claude_code_cost_usd:rate1h", "{{model}}"),
-        ], "currencyUSD", stack=True), 12, 8),
-        L.place(timeseries("Tokens / s by type", [
-            ("sum by (type) (type:claude_code_tokens:rate5m)", "{{type}}"),
+        L.place(loki_series("Cost per hour by model", [
+            (request_sum("cost_usd", "1h", ("model",)), "{{model}}"),
+        ], "currencyUSD", stack=True, description="Cost of the API calls in the trailing hour."), 12, 8),
+        L.place(loki_series("Tokens / s by type", [
+            (f"sum(rate({CC_REQUESTS} | keep {f} | unwrap {f} [5m]))", name) for f, name in CC_TOKENS
         ], stack=True, description="cacheRead dominating is healthy: long sessions re-read their context cheaply."), 12, 8),
-        L.place(timeseries("Cost by source (main, subagent, auxiliary)", [
-            ("sum by (query_source) (increase(claude_code_cost_usage_USD_total[1h]))", "{{query_source}}"),
-        ], "currencyUSD", stack=True, description="Subagent fan-out shows up here first."), 12, 8),
-        L.place(timeseries("Cost by skill and agent", [
-            ('sum by (skill_name) (increase(claude_code_cost_usage_USD_total{skill_name!=""}[1h]))', "skill {{skill_name}}"),
-            ('sum by (agent_name) (increase(claude_code_cost_usage_USD_total{agent_name!=""}[1h]))', "agent {{agent_name}}"),
-        ], "currencyUSD"), 12, 8),
+        L.place(loki_series("Cost by source (main, subagent, auxiliary)", [
+            (request_sum("cost_usd", "1h", ("query_source",)), "{{query_source}}"),
+        ], "currencyUSD", stack=True,
+            description="Trailing hour. sdk is the desktop app's main loop, agent:* are subagents, the rest are side calls "
+                        "(prompt suggestions, compaction, web fetch). Subagent fan-out shows up here first."), 12, 8),
+        L.place(loki_series("Cost by skill and agent", [
+            (request_sum("cost_usd", "1h", ("skill_name",), 'skill_name!=""'), "skill {{skill_name}}"),
+            (request_sum("cost_usd", "1h", ("agent_name",), 'agent_name!=""'), "agent {{agent_name}}"),
+        ], "currencyUSD", description="Trailing hour."), 12, 8),
 
         L.row("Tools and API (events in Loki)"),
         L.place(table("Tool calls by tool and outcome",
@@ -441,16 +476,19 @@ def claude_code():
         ], "reqps"), 12, 9),
     ]
     return dashboard("claude-code", "Claude Code agents",
-                     "Spend, tokens, tools and traces from Claude Code's OpenTelemetry export.",
+                     "Spend, tokens, tools and traces from Claude Code's OpenTelemetry export. "
+                     "Spend and tokens are summed from one event per API call.",
                      p, time_from="now-24h")
 
 
 def claude_code_public():
-    """Public cut of claude_code(): metrics only, no logs, traces or skill names.
+    """Public cut of claude_code(): aggregates only, no log lines, traces or skill names.
 
     The log and trace rows show commands and file paths, and skill and MCP names
-    describe private work, so those panels are dropped and every query sheds the
-    identifying labels (process_owner, MCP, skill, OS and version details).
+    describe private work, so those panels are dropped. The spend row stays: its
+    Loki queries return sums by model, source or token type, never a log line.
+    Every query also sheds the identifying labels (process_owner, MCP, skill, OS
+    and version details).
     """
     d = claude_code()
     drop_rows = {"Tools and API (events in Loki)", "Traces"}

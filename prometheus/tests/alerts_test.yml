@@ -32,3 +32,26 @@ tests:
       - eval_time: 70m
         alertname: LocalLLMAvailabilityBudgetBurnFast
         exp_alerts: []
+
+  # USD 25 in the trailing hour for 15 minutes: the spend alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'model:claude_code_cost_usd:sum1h{model="m"}'
+        values: '25x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ClaudeCodeSpendSpike
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: Claude Code spend is above $20 per hour.
+
+  # USD 15 in the trailing hour: below the threshold, no alert.
+  - interval: 1m
+    input_series:
+      - series: 'model:claude_code_cost_usd:sum1h{model="m"}'
+        values: '15x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ClaudeCodeSpendSpike
+        exp_alerts: []
