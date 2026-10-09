@@ -252,7 +252,7 @@ class Exporter:
 
             pw = os.environ.get("SEARXNG_METRICS_PASSWORD", "")
             code, body, _ = http(SEARXNG + "/metrics", timeout=5, auth=f"exporter:{pw}") if pw else (0, "", 0)
-            reqs, rel = [], []
+            reqs, rel, resp = [], [], []
             for line in body.splitlines():
                 m = re.match(r'(searxng_engines_\w+)\{engine_name="([^"]+)"\}\s+(\S+)', line)
                 if not m:
@@ -265,8 +265,11 @@ class Exporter:
                     reqs.append(({"engine": e}, v, s))
                 elif metric == "searxng_engines_reliability_total":
                     rel.append(({"engine": e}, v / 100))
+                elif metric == "searxng_engines_response_time_total_seconds":
+                    resp.append(({"engine": e}, v))  # SearXNG's median since it started
             counter("searxng_engine_upstream_requests", reqs)
             gauge("searxng_engine_reliability", rel)
+            gauge("searxng_engine_response", resp, unit="s")
 
             code, body, _ = http(SEARXNG + "/stats/errors", timeout=5)
             errs = {}

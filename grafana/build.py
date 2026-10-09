@@ -726,9 +726,103 @@ def searxng():
                      "rate limits and the proxy egress. Internal; not shared.", p, refresh="1m", time_from="now-24h")
 
 
+def searxng_public():
+    """Public cut of the SearXNG dashboard: instance up, searches, success rate, and each engine's status.
+
+    Shows nothing of the egress setup (no proxy, exit IPs, hosts or which engine leaves through
+    which exit) and no raw error text. Every query aggregates to the engine or to a single value,
+    so no instance or job labels reach the public data frames.
+    """
+    L = Layout()
+    srch = 'searxng_searches_total{kind="search"'
+    state_map = [{"type": "value", "options": {
+        "0": {"text": "ok", "color": "green"}, "1": {"text": "no results", "color": "blue"},
+        "2": {"text": "rate-limited", "color": "orange"}, "3": {"text": "blocked", "color": "red"},
+        "4": {"text": "timeout", "color": "purple"}, "5": {"text": "error", "color": "dark-red"}}}]
+    p = [
+        L.row("Now"),
+        L.place(stat("Search engine up", "max(searxng_up)", "bool_yes_no",
+                     description="Whether the self-hosted SearXNG answers, checked every 30 s."), 4, 4),
+        L.place(stat("Searches per hour", f"sum(increase({srch}}}[1h]))", decimals=0,
+                     description="Searches made by the agents in the last hour, cached answers included."), 4, 4),
+        L.place(stat("Searches with results (24h)",
+                     f'sum(increase({srch}, outcome="ok"}}[24h])) / sum(increase({srch}}}[24h]))', "percentunit", decimals=1,
+                     description="Share of searches in the last 24 hours that returned at least one result."), 4, 4),
+        L.place(stat("Results per search (24h)",
+                     "sum(increase(searxng_search_results_sum[24h])) / sum(increase(searxng_search_results_count[24h]))",
+                     decimals=0, description="Merged results per search, all engines together."), 4, 4),
+        L.place(stat("Median search time (24h)",
+                     "histogram_quantile(0.5, sum by (le) (increase(searxng_search_duration_seconds_bucket[24h])))", "s",
+                     decimals=2, description="Time SearXNG takes to answer a search that is not served from the local cache."), 4, 4),
+        L.place(stat("Engines answering now", "count(max by (engine) (searxng_engine_state) <= 1) or vector(0)", decimals=0,
+                     description="Engines whose latest call came back without an error."), 4, 4),
+        L.row("Search engines"),
+    ]
+    q = lambda expr, ref: {**target(expr, ref=ref), "instant": True, "format": "table"}
+    answered = 'sum by (engine) (increase(searxng_engine_calls_total{status=~"ok|empty"}[24h]))'
+    calls = "sum by (engine) (increase(searxng_engine_calls_total[24h]))"
+    engines = {
+        "type": "table", "title": "Search engines in use", "datasource": PROM,
+        "description": "Every engine SearXNG queries for these searches. Now: the result of the engine's latest call "
+                       "(blank when nobody searched in the last 30 minutes). Rate-limited and blocked engines are "
+                       "paused by SearXNG and tried again a few minutes later. Answered: share of calls in the last 24 hours "
+                       "that came back without an error. Median time: the engine's own answer time over the last 24 hours.",
+        "targets": [
+            q("max by (engine) (searxng_engine_state)", "A"),
+            q(f"({answered} / {calls}) and ({calls} > 0)", "B"),
+            q("max by (engine) (quantile_over_time(0.5, searxng_engine_response_seconds[24h]))", "C"),
+            q("sum by (engine) (increase(searxng_engine_results_total[24h]))", "D"),
+        ],
+        "transformations": [
+            {"id": "merge", "options": {}},
+            {"id": "organize", "options": {
+                "excludeByName": {"Time": True},
+                "renameByName": {"engine": "Engine", "Value #A": "Now", "Value #B": "Answered (24h)",
+                                 "Value #C": "Median time", "Value #D": "Results (24h)"}}},
+            {"id": "sortBy", "options": {"sort": [{"field": "Engine"}]}},
+        ],
+        "fieldConfig": {"defaults": {}, "overrides": [
+            {"matcher": {"id": "byName", "options": "Now"}, "properties": [
+                {"id": "mappings", "value": state_map},
+                {"id": "custom.cellOptions", "value": {"type": "color-background"}}]},
+            {"matcher": {"id": "byName", "options": "Answered (24h)"}, "properties": [
+                {"id": "unit", "value": "percentunit"}, {"id": "decimals", "value": 0}]},
+            {"matcher": {"id": "byName", "options": "Median time"}, "properties": [
+                {"id": "unit", "value": "s"}, {"id": "decimals", "value": 1}]},
+            {"matcher": {"id": "byName", "options": "Results (24h)"}, "properties": [{"id": "decimals", "value": 0}]},
+        ]},
+        "options": {"showHeader": True},
+    }
+    p.append(L.place(engines, 12, 12))
+    states = {
+        "type": "state-timeline", "title": "Engine status over time", "datasource": PROM,
+        "description": "Result of each engine's latest call. Gaps mean nobody searched.",
+        "targets": [target("max by (engine) (searxng_engine_state)", "{{engine}}")],
+        "fieldConfig": {"defaults": {"custom": {"fillOpacity": 80, "lineWidth": 0}, "mappings": state_map}, "overrides": []},
+        "options": {"showValue": "never", "rowHeight": 0.8, "mergeValues": True, "legend": {"showLegend": False}},
+    }
+    p.append(L.place(states, 12, 12))
+    p += [
+        L.row("Searches"),
+        L.place(timeseries("Searches per hour", [
+            (f"sum by (outcome) (increase({srch}}}[1h]))", "{{outcome}}"),
+        ], stack=True, description="ok: results. empty: no results and no engine failed. degraded: no results while engines were paused."), 8, 8),
+        L.place(timeseries("Search time", [
+            ("histogram_quantile(0.50, sum by (le) (rate(searxng_search_duration_seconds_bucket[30m])))", "median"),
+            ("histogram_quantile(0.95, sum by (le) (rate(searxng_search_duration_seconds_bucket[30m])))", "95th percentile"),
+        ], "s", description="Searches not served from the local cache."), 8, 8),
+        L.place(timeseries("Results per hour by engine", [
+            ("sum by (engine) (increase(searxng_engine_results_total[1h]))", "{{engine}}"),
+        ], stack=True, description="A result found by two engines counts for both."), 8, 8),
+    ]
+    return dashboard("searxng-public", "SearXNG search engines",
+                     "Status of the self-hosted SearXNG the agents search through: whether it answers, how many searches "
+                     "return results, and how each search engine is doing.", p, refresh="1m", time_from="now-24h")
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
