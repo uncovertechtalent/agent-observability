@@ -677,7 +677,7 @@ def searxng():
         ], description="Merged results per upstream call, all engines together."), 12, 8),
         L.place(timeseries("Engines left out by pacing (per min)", [
             ("sum by (engine) (rate(searxng_engine_skipped_total[15m])) * 60", "{{engine}}"),
-        ], description="search.sh leaves an engine out of a call while it is inside its per-engine gap (20 s for google cse and gmx, 30 s for brave, 10 s for zapmeta)."), 12, 8),
+        ], description="search.sh leaves an engine out of a call while it is inside its per-engine gap (SEARXNG_ENGINE_GAPS in search.sh)."), 12, 8),
 
         L.row("Engines"),
     ]

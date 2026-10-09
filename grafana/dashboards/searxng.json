@@ -572,7 +572,7 @@
     {
       "type": "timeseries",
       "title": "Engines left out by pacing (per min)",
-      "description": "search.sh leaves an engine out of a call while it is inside its per-engine gap (20 s for google cse and gmx, 30 s for brave, 10 s for zapmeta).",
+      "description": "search.sh leaves an engine out of a call while it is inside its per-engine gap (SEARXNG_ENGINE_GAPS in search.sh).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
