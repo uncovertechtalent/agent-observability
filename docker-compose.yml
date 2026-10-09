@@ -120,6 +120,22 @@ services:
     depends_on: [loki]
     restart: unless-stopped
 
+  # AWS spend from Cost Explorer and AWS Budgets. The host's AWS shared config is mounted
+  # read-only and never leaves the host; no port is published, only Prometheus scrapes it.
+  aws-cost-exporter:
+    build:
+      context: ./aws-cost-exporter
+      args: {UID: "${AWS_CONFIG_UID:-1000}", GID: "${AWS_CONFIG_GID:-1000}"}
+    environment:
+      - AWS_PROFILE=${AWS_COST_PROFILE:-default}
+      - AWS_SHARED_CREDENTIALS_FILE=/aws/credentials
+      - AWS_CONFIG_FILE=/aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro
+      - aws_cost_exporter_data:/data
+    expose: ["9202"]
+    restart: unless-stopped
+
 volumes:
   alloy_data:
   prometheus_data:
@@ -127,3 +143,4 @@ volumes:
   tempo_data:
   grafana_data:
   deploy_exporter_data:
+  aws_cost_exporter_data:

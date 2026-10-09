@@ -820,9 +820,143 @@ def searxng_public():
                      "return results, and how each search engine is doing.", p, refresh="1m", time_from="now-24h")
 
 
+
+def aws_spend():
+    """AWS account spend from Cost Explorer and AWS Budgets (aws-cost-exporter).
+
+    Internal only: the panels show real spend and are never shared publicly. The exporter
+    fetches every 6 hours and Cost Explorer lags by up to a day, so this dashboard moves
+    a few times a day. Day, month and service are labels on instant series, so the daily
+    and monthly charts are instant queries pivoted with groupingToMatrix.
+    """
+    L = Layout()
+    usd = "currencyUSD"
+    budget = 'max(aws_budget_limit_usd{period="MONTHLY"})'
+
+    def ratio_gauge(title, expr, description):
+        return {"type": "gauge", "title": title, "description": description, "datasource": PROM,
+                "targets": [target(expr)],
+                "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 0, "min": 0, "max": 1.2,
+                                             "thresholds": {"mode": "absolute", "steps": [
+                                                 {"color": "green", "value": None}, {"color": "orange", "value": 0.8},
+                                                 {"color": "red", "value": 1}]}}, "overrides": []},
+                "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdMarkers": True}}
+
+    def pivot_bars(title, expr, row, col, description, stack=True):
+        t = target(expr, format="table", instant=True)
+        return {"type": "barchart", "title": title, "description": description, "datasource": PROM, "targets": [t],
+                "transformations": [
+                    {"id": "groupingToMatrix", "options": {"columnField": col, "rowField": row, "valueField": "Value",
+                                                           "emptyValue": "zero"}},
+                    {"id": "sortBy", "options": {"sort": [{"field": f"{row}\\{col}"}]}}],
+                "fieldConfig": {"defaults": {"unit": usd, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
+                "options": {"xField": f"{row}\\{col}", "stacking": "normal" if stack else "none", "xTickLabelRotation": -45,
+                            "xTickLabelSpacing": 100, "legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
+                            "tooltip": {"mode": "multi"}}}
+
+    p = [
+        L.row("This month"),
+        L.place(stat("Month to date", "max(aws_cost_mtd_usd)", usd, decimals=2,
+                     description="Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day."), 4, 5),
+        L.place(stat("Monthly budget", budget, usd, decimals=2,
+                     description="The MONTHLY cost budget in AWS Budgets."), 4, 5),
+        L.place(ratio_gauge("Month to date / budget", f"max(aws_cost_mtd_usd) / {budget}",
+                            "Orange at 80% (AWSCostMonthToDateOver80), red at 100%."), 4, 5),
+        L.place(stat("Forecast, month end", "max(aws_cost_month_forecast_usd)", usd, decimals=2,
+                     description="Days before today plus Cost Explorer's forecast from today to the end of the month."), 4, 5),
+        L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
+                            "Red above 100% (AWSCostForecastOverBudget)."), 4, 5),
+        L.place(stat("AWS Budgets forecast", "max(aws_budget_forecast_usd)", usd, decimals=2,
+                     description="The forecast AWS Budgets calculates itself, as a cross-check of the Cost Explorer figure."), 4, 5),
+
+        L.place(stat("Latest day / 28-day median", "max(aws_cost_latest_day_usd) / max(aws_cost_trailing_median_day_usd)",
+                     decimals=2, description="Latest UTC day before today against the median of the 28 days before it, both without domain "
+                                             "renewals and tax. AWSCostDailySpike fires above 2 when the day is above USD 1."), 4, 4),
+        L.place(stat("Latest day", "max(aws_cost_latest_day_usd)", usd, decimals=2,
+                     description="May be partial: Cost Explorer marks recent days as estimated."), 4, 4),
+        L.place(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no"), 4, 4),
+        L.place(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
+                     description="Time since the exporter last asked Cost Explorer for this month (every 6 h)."), 4, 4),
+        L.place(stat("Cost Explorer API cost", "max(aws_cost_explorer_spend_usd_total)", usd, decimals=2,
+                     description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started."), 4, 4),
+        L.place(stat("Exporter errors", "max(aws_cost_exporter_errors_total)", decimals=0,
+                     description="Failed polls since the cache was created. The cache keeps serving the last good data."), 4, 4),
+
+        L.place(timeseries("Month to date against budget", [
+            ("max(aws_cost_mtd_usd)", "month to date"),
+            ("max(aws_cost_month_forecast_usd)", "forecast, month end"),
+            (budget, "budget"),
+            (f"0.8 * {budget}", "80% of budget"),
+        ], usd, description="Recorded from the day the exporter started; Prometheus keeps 90 days."), 24, 8),
+
+        L.row("Daily spend"),
+        L.place(pivot_bars("Daily spend by service", "aws_cost_day_usd", "day", "service",
+                           "Unblended cost per UTC day and service, this month and the three months before. "
+                           "Bedrock carries the evals, EC2 the reverse proxy box, Route 53 the DNS zones; data transfer "
+                           "shows under the service that caused it. The latest days are estimates until Cost Explorer settles them."), 24, 10),
+
+        L.row("Services and months"),
+    ]
+    top = {"type": "bargauge", "title": "Top services this month", "datasource": PROM,
+           "description": "Month to date by service, largest first.",
+           "targets": [target("sort_desc(topk(10, aws_cost_mtd_by_service_usd))", "{{service}}", instant=True)],
+           "fieldConfig": {"defaults": {"unit": usd, "decimals": 2, "min": 0}, "overrides": []},
+           "options": {"orientation": "horizontal", "displayMode": "basic", "showUnfilled": True,
+                       "reduceOptions": {"calcs": ["lastNotNull"]}}}
+    p.append(L.place(top, 10, 10))
+    months = table("Last 3 months by service", "aws_cost_month_usd",
+                   description="Unblended cost per calendar month and service; the current month is to date.")
+    months["transformations"] = [
+        {"id": "groupingToMatrix", "options": {"columnField": "month", "rowField": "service", "valueField": "Value", "emptyValue": "zero"}}]
+    months["fieldConfig"] = {"defaults": {"unit": usd, "decimals": 2}, "overrides": []}
+    p.append(L.place(months, 14, 10))
+    monthly = {"type": "barchart", "title": "Monthly total", "datasource": PROM,
+               "description": "All services per calendar month; the current month is to date.",
+               "targets": [target("sum by (month) (aws_cost_month_total_usd)", format="table", instant=True)],
+               "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": True},
+                                                                  "renameByName": {"Value": "total"}}}],
+               "fieldConfig": {"defaults": {"unit": usd, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
+               "options": {"xField": "month", "showValue": "always", "legend": {"showLegend": False}}}
+    p.append(L.place(monthly, 12, 8))
+    budgets = {"type": "table", "title": "AWS Budgets", "datasource": PROM,
+               "description": "Every budget in the account as AWS Budgets reports it.",
+               "targets": [target("max by (budget, period, unit) (aws_budget_limit_usd)", ref="A", format="table", instant=True),
+                           target("max by (budget, period, unit) (aws_budget_actual_usd)", ref="B", format="table", instant=True),
+                           target("max by (budget, period, unit) (aws_budget_forecast_usd)", ref="C", format="table", instant=True)],
+               "transformations": [
+                   {"id": "merge", "options": {}},
+                   {"id": "organize", "options": {
+                       "excludeByName": {"Time": True, "__name__": True, "instance": True, "job": True},
+                       "renameByName": {"Value #A": "limit", "Value #B": "actual", "Value #C": "forecast"}}}],
+               # aggregated to budget, period and unit, so merge joins the three into one row per budget
+               "fieldConfig": {"defaults": {"unit": usd, "decimals": 2}, "overrides": []},
+               "options": {"showHeader": True}}
+    p.append(L.place(budgets, 12, 8))
+    steps = {"Data age": [("green", None), ("orange", 7 * 3600), ("red", 13 * 3600)],
+             "Latest day / 28-day median": [("green", None), ("orange", 1.5), ("red", 2)],
+             "Exporter errors": [("green", None), ("red", 1)]}
+    for panel in p:  # current-value panels read the latest sample; a 30-day range step would skip a young series
+        if panel["type"] in ("stat", "gauge"):
+            for t in panel["targets"]:
+                t.update({"instant": True, "range": False})
+        if panel["type"] == "stat":  # amounts carry no colour; only the health stats have thresholds
+            if panel["title"] in steps:
+                panel["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+                    {"color": c, "value": v} for c, v in steps[panel["title"]]]}
+            else:
+                panel["options"]["colorMode"] = "none"
+    p.append(L.row("Exporter"))
+    p.append(L.place(timeseries("AWS API requests per day", [
+        ("sum by (api) (increase(aws_cost_exporter_api_requests_total[1d]))", "{{api}}"),
+    ], description="Cost Explorer requests cost USD 0.01 each; AWS Budgets requests are free."), 24, 7))
+    return dashboard("aws-spend", "AWS spend",
+                     "AWS account spend from Cost Explorer and AWS Budgets: month to date and forecast against the "
+                     "monthly budget, daily spend by service, top services, the last three months. Internal; not shared.",
+                     p, refresh="15m", time_from="now-30d")
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

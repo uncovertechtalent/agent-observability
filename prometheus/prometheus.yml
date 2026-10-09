@@ -59,3 +59,9 @@ scrape_configs:
     scrape_interval: 60s
     static_configs:
       - targets: ["deploy-exporter:9201"]
+
+  # AWS spend (Cost Explorer, AWS Budgets). The exporter caches; scraping it costs nothing.
+  - job_name: aws-cost-exporter
+    scrape_interval: 60s
+    static_configs:
+      - targets: ["aws-cost-exporter:9202"]

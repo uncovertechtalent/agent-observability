@@ -109,3 +109,39 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: 95th percentile search latency is above 8 s; an engine is hanging until its timeout.
+
+  # AWS spend from aws-cost-exporter: Cost Explorer every 6 h, AWS Budgets for the budget.
+  # The budget is the MONTHLY budget in AWS Budgets; without one, the budget rules stay quiet.
+  # Cost Explorer lags by up to a day, so "latest day" is yesterday at best, and may be partial.
+  - name: aws_cost
+    rules:
+      - alert: AWSCostForecastOverBudget
+        expr: max(aws_cost_month_forecast_usd) > max(aws_budget_limit_usd{period="MONTHLY"})
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: AWS month-end forecast is above the monthly budget.
+      - alert: AWSCostMonthToDateOver80
+        expr: max(aws_cost_mtd_usd) > 0.8 * max(aws_budget_limit_usd{period="MONTHLY"})
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: AWS spend this month is above 80% of the monthly budget.
+      # Twice the median of the 28 days before, with a USD 1 floor so a cent-sized day stays quiet.
+      - alert: AWSCostDailySpike
+        expr: |
+          max(aws_cost_latest_day_usd) > 2 * max(aws_cost_trailing_median_day_usd)
+          and max(aws_cost_latest_day_usd) > 1
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: The latest day's AWS spend is more than twice the 28-day median.
+      # Two missed 6-hour polls, or a running exporter that has never fetched.
+      - alert: AWSCostExporterStale
+        expr: |
+          time() - max(aws_cost_exporter_last_success_timestamp_seconds) > 13 * 3600
+          or (absent(aws_cost_exporter_last_success_timestamp_seconds) and on() max(up{job="aws-cost-exporter"}) == 1)
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).

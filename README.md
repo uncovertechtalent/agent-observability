@@ -2,12 +2,13 @@
 
 Metrics, logs and traces for AI coding agents and a self-hosted LLM, on one box, with Prometheus at the centre.
 
-Four sources feed it:
+Five sources feed it:
 
 - **Claude Code**, through its built-in OpenTelemetry export: cost, tokens, cache use, tool calls, API errors, permission decisions and interaction traces.
 - **Ollama**, through a small metering proxy that turns each inference call into Prometheus metrics named after the OpenTelemetry GenAI conventions: time to first token, decode speed, token counts, model load time, resident models and their VRAM split.
 
 - **Website deploys**, through a small exporter that reads the GitHub Actions runs of three sites (machinebehavior.io, tychat.io, uncovertechtalent.com): every run, its steps, the conformity gate's verdict per check, and what the deploy shipped.
+- **AWS spend**, through an exporter that reads Cost Explorer and AWS Budgets: daily cost by service for this month and the three before, the month-end forecast and the monthly budget. Cost Explorer bills USD 0.01 per request, so the exporter fetches every 6 hours (history once a day), caches every answer and counts its own requests. The dashboard shows real spend and stays internal.
 - **SearXNG**, the self-hosted search engine the agents search through, by an exporter on the laptop that runs it: whether it answers, searches per minute, latency, results per query, cache hits, each engine's rate limits and blocks, and whether its proxy egress exits from the right IP.
 
 Everything runs from one `docker compose up`. Dashboards, rules and alerts live in the repo as code.
@@ -47,6 +48,7 @@ docker compose up -d --build
 | Tempo | 3200 | Claude Code traces |
 | ollama-exporter | 11435 | Metering proxy in front of Ollama |
 | deploy-exporter | 9201 | Website deploy runs to Loki, latest state as metrics |
+| aws-cost-exporter | 9202 (compose network only) | AWS spend and budget as metrics; reads the host's `~/.aws` read-only |
 
 Point Claude Code at the stack:
 
@@ -128,6 +130,7 @@ grafana/build.py                 dashboards as code
 grafana/dashboards/              generated JSON, provisioned read-only
 ollama-exporter/                 the metering proxy
 deploy-exporter/                 website deploy runs from GitHub Actions
+aws-cost-exporter/               AWS spend from Cost Explorer and AWS Budgets
 client/claude-code.env           Claude Code telemetry settings
 client/searxng_exporter.py       SearXNG health, pushed as OTLP from the machine that runs it
 client/searxng-exporter.plist    launchd agent for it (macOS)

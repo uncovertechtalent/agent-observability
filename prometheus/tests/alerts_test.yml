@@ -136,3 +136,121 @@ tests:
       - eval_time: 8m
         alertname: SearXNGDegradedSearches
         exp_alerts: []
+
+  # AWS: forecast above the monthly budget fires; below it stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_month_forecast_usd'
+        values: '120x120'
+      - series: 'aws_budget_limit_usd{budget="b",period="MONTHLY",unit="USD"}'
+        values: '100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostForecastOverBudget
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: AWS month-end forecast is above the monthly budget.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_month_forecast_usd'
+        values: '90x120'
+      - series: 'aws_budget_limit_usd{budget="b",period="MONTHLY",unit="USD"}'
+        values: '100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostForecastOverBudget
+        exp_alerts: []
+
+  # AWS: month to date at 85% of budget fires; at 70% it does not.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_mtd_usd'
+        values: '85x120'
+      - series: 'aws_budget_limit_usd{budget="b",period="MONTHLY",unit="USD"}'
+        values: '100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostMonthToDateOver80
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: AWS spend this month is above 80% of the monthly budget.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_mtd_usd'
+        values: '70x120'
+      - series: 'aws_budget_limit_usd{budget="b",period="MONTHLY",unit="USD"}'
+        values: '100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostMonthToDateOver80
+        exp_alerts: []
+
+  # AWS: a day at 2.5x the median fires; 1.5x does not; 8x under the USD 1 floor does not.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_latest_day_usd'
+        values: '5x120'
+      - series: 'aws_cost_trailing_median_day_usd'
+        values: '2x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostDailySpike
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: The latest day's AWS spend is more than twice the 28-day median.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_latest_day_usd'
+        values: '3x120'
+      - series: 'aws_cost_trailing_median_day_usd'
+        values: '2x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostDailySpike
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_latest_day_usd'
+        values: '0.8x120'
+      - series: 'aws_cost_trailing_median_day_usd'
+        values: '0.1x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AWSCostDailySpike
+        exp_alerts: []
+
+  # AWS exporter: no successful fetch for 14 h fires; a fresh fetch stays quiet;
+  # a running exporter that never fetched fires.
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_exporter_last_success_timestamp_seconds'
+        values: '0x900'
+    alert_rule_test:
+      - eval_time: 14h
+        alertname: AWSCostExporterStale
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_exporter_last_success_timestamp_seconds'
+        values: '0+60x900'
+    alert_rule_test:
+      - eval_time: 14h
+        alertname: AWSCostExporterStale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'up{job="aws-cost-exporter",instance="aws-cost-exporter:9202"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: AWSCostExporterStale
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).
