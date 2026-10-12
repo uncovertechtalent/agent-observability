@@ -68,6 +68,33 @@ tests:
         alertname: ClaudeCodeSpendSpike
         exp_alerts: []
 
+  # 15 calls denied by rule in 15 minutes, 2 by hook: the denial alert fires for the rule source only.
+  - interval: 1m
+    input_series:
+      - series: 'source:claude_code_tool_denials:count15m{source="config"}'
+        values: '3 15x5'
+      - series: 'source:claude_code_tool_denials:count15m{source="hook"}'
+        values: '2x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AgentToolDenialsSpike
+        exp_alerts:
+          - exp_labels: {severity: ticket, source: config}
+            exp_annotations:
+              summary: Agents had more than 14 tool calls denied by config in 15 minutes.
+
+  # 14 denials, at the threshold, next to the zero series of a quiet window: no alert.
+  - interval: 1m
+    input_series:
+      - series: 'source:claude_code_tool_denials:count15m{source="config"}'
+        values: '14x10'
+      - series: 'source:claude_code_tool_denials:count15m'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AgentToolDenialsSpike
+        exp_alerts: []
+
   # SearXNG answers nothing for 5 minutes: page.
   - interval: 30s
     input_series:

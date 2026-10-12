@@ -64,6 +64,18 @@ groups:
         annotations:
           summary: Claude Code spend is above $40 per hour.
 
+  - name: agent_tool_calls
+    rules:
+      # source:claude_code_tool_denials:count15m comes from Loki's ruler (tool_decision events
+      # with decision="reject" in the trailing 15 minutes, by source), remote-written to Prometheus.
+      # Threshold from 2026-09-12..10-12 in Loki: 26 denials (20 by rule, 6 by hook, 0 by a
+      # person) and 7 in the busiest 15 minutes; the alert sits at twice that.
+      - alert: AgentToolDenialsSpike
+        expr: max by (source) (source:claude_code_tool_denials:count15m) > 14
+        labels: {severity: ticket}
+        annotations:
+          summary: "Agents had more than 14 tool calls denied by {{ $labels.source }} in 15 minutes."
+
   # SearXNG, the house search engine. Its exporter pushes from the laptop that runs it, so
   # a sleeping laptop leaves gaps, not zeros: the rules read pushed values and rates with a
   # traffic floor, never up{} or absent().

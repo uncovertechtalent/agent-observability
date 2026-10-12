@@ -1380,9 +1380,115 @@ def site_traffic(public=False):
     return d
 
 
+# ---------------------------------------------------------------- agent tool calls
+
+TOOL_DECISIONS = CC_EVENTS + ' | event_name="tool_decision"'
+# Moves together with AgentToolDenialsSpike in prometheus/rules/alerts.yml.
+TOOL_DENIALS_ALERT = 14
+
+
+def agent_tool_calls():
+    """Every tool call of the coding agents and who decided it: a rule, a hook, or a person.
+
+    Built from the CTO Powersuit's /ai-ops:tool-audit spec (agent-tool-calls.json). Internal
+    only, never shared publicly: with OTEL_LOG_TOOL_DETAILS=1 the trail panel shows each
+    call's parameters, shell commands included. There is no public cut.
+    """
+    L = Layout()
+    rej = TOOL_DECISIONS + ' | decision="reject"'
+    asked = TOOL_DECISIONS + ' | source=~"user_.*"'
+
+    def count(sel, window="$__range", by=(), zero=False):
+        inner = f"count_over_time({sel} [{window}])"
+        q = f"sum by ({', '.join(by)}) ({inner})" if by else f"sum({inner})"
+        return q + " or vector(0)" if zero else q
+
+    def counter(title, expr, description="", warn=False):
+        p = stat(title, expr, unit="none", decimals=0, description=description, ds=LOKI)
+        if warn:  # any denial shows orange
+            p["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+                {"color": "green", "value": None}, {"color": "orange", "value": 1}]}
+        else:
+            p["options"]["colorMode"] = "none"
+        return p
+
+    def ranked(title, expr, columns, description=""):
+        """Counts per tool as a table, largest first; a stat panel shows one tile per series and scrolls.
+
+        Grafana turns a Loki instant query into one table frame: Time, one column per label, "Value #A".
+        """
+        return {
+            "type": "table", "title": title, "description": description, "datasource": LOKI,
+            "targets": [target(expr, ds=LOKI, queryType="instant")],
+            "transformations": [
+                {"id": "organize", "options": {"excludeByName": {"Time": True},
+                                               "indexByName": {c: i for i, c in enumerate((*columns, "Value #A"))},
+                                               "renameByName": {**columns, "Value #A": "Calls"}}},
+                {"id": "sortBy", "options": {"sort": [{"field": "Calls", "desc": True}]}},
+            ],
+            "fieldConfig": {"defaults": {"unit": "none", "decimals": 0}, "overrides": []},
+            "options": {"showHeader": True, "cellHeight": "sm"},
+        }
+
+    # 2880 points keep the step at 15 minutes or less up to a 30-day range, so the 15-minute
+    # windows tile the range and no denial falls between two samples. Points, because a
+    # quiet stretch has no samples and a lone value would draw no line.
+    denied_15m = loki_series("Denied per 15 minutes by source", [
+        (count(rej, "15m", ("source",)), "{{source}}"),
+    ], description=f"Denied calls in the trailing 15 minutes, one line per source (config is a deny rule, hook a "
+                   f"PreToolUse hook, user_* a person). The AgentToolDenialsSpike alert fires when one source passes "
+                   f"the red line at {TOOL_DENIALS_ALERT}; the lines are not stacked because the alert reads each source.")
+    denied_15m["maxDataPoints"] = 2880
+    denied_15m["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+        {"color": "transparent", "value": None}, {"color": "red", "value": TOOL_DENIALS_ALERT}]}
+    denied_15m["fieldConfig"]["defaults"]["custom"].update(
+        thresholdsStyle={"mode": "dashed+area"}, axisSoftMax=TOOL_DENIALS_ALERT * 1.25,
+        showPoints="always", pointSize=6)
+
+    p = [
+        L.row("Decisions"),
+        L.place(counter("Allowed", count(TOOL_DECISIONS + ' | decision="accept"'),
+                        description="Calls the settings, a hook or a person allowed in the time range."), 6, 4),
+        L.place(counter("Denied", count(rej, zero=True), warn=True,
+                        description="Calls a deny rule, a hook or a person refused in the time range."), 6, 4),
+        L.place(counter("Asked", count(asked, zero=True),
+                        description="Calls a person answered at a prompt (sources user_temporary, user_permanent, "
+                                    "user_reject, user_abort). A prompt nobody answered writes no event."), 6, 4),
+        L.place(counter("Blocked by hooks", count(rej + ' | source="hook"', zero=True), warn=True,
+                        description="Calls a PreToolUse hook refused."), 6, 4),
+        L.place(denied_15m, 12, 8),
+        L.place(loki_series("Calls per hour by decision", [
+            (count(TOOL_DECISIONS, "1h", ("decision",)), "{{decision}}"),
+        ], stack=True), 12, 8),
+
+        L.row("By tool"),
+        L.place(ranked("Denied by tool and source", count(rej, by=("tool_name", "source")),
+                       {"tool_name": "Tool", "source": "Source"}), 12, 8),
+        L.place(ranked("Asked by tool", count(asked, by=("tool_name", "source")),
+                       {"tool_name": "Tool", "source": "Source"}), 12, 8),
+        L.place(ranked("Allowed by tool", count(TOOL_DECISIONS + ' | decision="accept"', by=("tool_name",)),
+                       {"tool_name": "Tool"}), 12, 8),
+        L.place(ranked("Failed by tool", count(CC_EVENTS + ' | event_name="tool_result" | success="false"',
+                                               by=("tool_name",)), {"tool_name": "Tool"},
+                       description="Calls that ran and failed (tool_result success false)."), 12, 8),
+
+        L.row("Trail"),
+        L.place(logs("Denied calls", rej,
+                     description="One line per denied call. Open a line for tool_name, source, prompt_id and, "
+                                 "with OTEL_LOG_TOOL_DETAILS=1, tool_parameters."), 24, 10),
+    ]
+    d = dashboard("agent-tool-calls", "Agent tool calls",
+                  "Every tool call of the coding agents and who decided it: a rule in the settings, a hook, or a "
+                  "person at a prompt. Counted from Claude Code's tool_decision and tool_result events in Loki. "
+                  "Internal; never shared: the trail panel shows tool parameters.",
+                  p, refresh="1m", time_from="now-24h")
+    d["tags"] += ["ai-ops", "security"]
+    return d
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), site_traffic(), site_traffic(public=True)):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), site_traffic(), site_traffic(public=True), agent_tool_calls()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

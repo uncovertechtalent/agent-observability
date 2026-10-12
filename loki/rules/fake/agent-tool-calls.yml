@@ -1,0 +1,16 @@
+# Loki ruler: denied tool calls of the coding agents, remote-written to Prometheus.
+# Claude Code writes one tool_decision event per permission decision; decision="reject" comes
+# with source config (a deny rule), hook (a PreToolUse hook), or user_reject / user_abort (a
+# person at a prompt). From the CTO Powersuit's /ai-ops:tool-audit skill.
+groups:
+  - name: agent_tool_calls
+    interval: 1m
+    rules:
+      # Denied calls in the trailing 15 minutes, by source. Feeds the AgentToolDenialsSpike alert
+      # in prometheus/rules/alerts.yml. "or vector(0)" writes a 0 without a source label when
+      # nothing was denied, so a quiet window reads 0 and a missing series means the ruler or
+      # the telemetry stopped.
+      - record: source:claude_code_tool_denials:count15m
+        expr: |
+          sum by (source) (count_over_time({service_name=~"claude-code.*"} | event_name="tool_decision" | decision="reject" [15m]))
+          or vector(0)
