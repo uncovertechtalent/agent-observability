@@ -32,7 +32,7 @@ TOKEN_OWNER = os.environ.get("GITHUB_TOKEN_OWNER", "uncovertechtalent")  # the o
 def token_for(path):
     parts = path.lstrip("/").split("/")
     if len(parts) > 1 and parts[0] == "repos":
-        return os.environ.get("GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", parts[1].upper()), TOKEN)
+        return os.environ.get("GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", parts[1].upper())) or TOKEN
     return TOKEN
 LOKI = os.environ.get("LOKI_URL", "http://loki:3100")
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
