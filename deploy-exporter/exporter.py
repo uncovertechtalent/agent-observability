@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+TOKEN_OWNER = os.environ.get("GITHUB_TOKEN_OWNER", "uncovertechtalent")  # the owner GITHUB_TOKEN covers
 # A fine-grained token covers one resource owner (a user or an organisation). GITHUB_TOKEN_<OWNER>
 # overrides GITHUB_TOKEN for repos of that owner: the owner name upper-cased, every other character
 # as "_", for example GITHUB_TOKEN_UNCOVERTECHTALENT_GIT for uncovertechtalent-git/<repo>.
@@ -304,7 +305,7 @@ if __name__ == "__main__":
         if not os.environ.get(var) and not TOKEN:
             log(f"{cfg['site']}: no token ({var} or GITHUB_TOKEN); job logs fail"
                 + ("" if cfg.get("public") else ", and so do the runs of this private repo"))
-        elif not os.environ.get(var) and not cfg.get("public") and owner != SITES[0]["repo"].split("/")[0]:
+        elif not os.environ.get(var) and not cfg.get("public") and owner.lower() != TOKEN_OWNER.lower():
             log(f"{cfg['site']}: {var} not set; GITHUB_TOKEN covers one owner, so this private repo will answer 404")
     threading.Thread(target=loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
