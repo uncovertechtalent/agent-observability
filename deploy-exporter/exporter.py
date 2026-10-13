@@ -298,7 +298,13 @@ if __name__ == "__main__":
         log(f"state loaded: {sum(len(v) for v in state['seen'].values())} runs seen")
     except FileNotFoundError:
         log("no state yet; backfilling from the GitHub API")
-    if not TOKEN:
-        log("GITHUB_TOKEN not set: private repos and job logs will fail")
+    for cfg in SITES:
+        owner = cfg["repo"].split("/")[0]
+        var = "GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", owner.upper())
+        if not os.environ.get(var) and not TOKEN:
+            log(f"{cfg['site']}: no token ({var} or GITHUB_TOKEN); job logs fail"
+                + ("" if cfg.get("public") else ", and so do the runs of this private repo"))
+        elif not os.environ.get(var) and not cfg.get("public") and owner != SITES[0]["repo"].split("/")[0]:
+            log(f"{cfg['site']}: {var} not set; GITHUB_TOKEN covers one owner, so this private repo will answer 404")
     threading.Thread(target=loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
