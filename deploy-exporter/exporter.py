@@ -29,10 +29,14 @@ TOKEN_OWNER = os.environ.get("GITHUB_TOKEN_OWNER", "uncovertechtalent")  # the o
 # as "_", for example GITHUB_TOKEN_UNCOVERTECHTALENT_GIT for uncovertechtalent-git/<repo>.
 
 
+def token_var(owner):
+    return "GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", owner.upper())
+
+
 def token_for(path):
     parts = path.lstrip("/").split("/")
     if len(parts) > 1 and parts[0] == "repos":
-        return os.environ.get("GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", parts[1].upper())) or TOKEN
+        return os.environ.get(token_var(parts[1])) or TOKEN
     return TOKEN
 LOKI = os.environ.get("LOKI_URL", "http://loki:3100")
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
@@ -301,7 +305,7 @@ if __name__ == "__main__":
         log("no state yet; backfilling from the GitHub API")
     for cfg in SITES:
         owner = cfg["repo"].split("/")[0]
-        var = "GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", owner.upper())
+        var = token_var(owner)
         if not os.environ.get(var) and not TOKEN:
             log(f"{cfg['site']}: no token ({var} or GITHUB_TOKEN); job logs fail"
                 + ("" if cfg.get("public") else ", and so do the runs of this private repo"))
