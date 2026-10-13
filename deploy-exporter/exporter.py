@@ -23,6 +23,16 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+# A fine-grained token covers one resource owner (a user or an organisation). GITHUB_TOKEN_<OWNER>
+# overrides GITHUB_TOKEN for repos of that owner: the owner name upper-cased, every other character
+# as "_", for example GITHUB_TOKEN_UNCOVERTECHTALENT_GIT for uncovertechtalent-git/<repo>.
+
+
+def token_for(path):
+    parts = path.lstrip("/").split("/")
+    if len(parts) > 1 and parts[0] == "repos":
+        return os.environ.get("GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", parts[1].upper()), TOKEN)
+    return TOKEN
 LOKI = os.environ.get("LOKI_URL", "http://loki:3100")
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 POLL = int(os.environ.get("POLL_SECONDS", "60"))
@@ -61,7 +71,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def gh(path, raw=False):
     req = urllib.request.Request("https://api.github.com/" + path.lstrip("/"), headers={
         "Accept": "application/vnd.github+json", "User-Agent": "deploy-exporter",
-        **({"Authorization": f"Bearer {TOKEN}"} if TOKEN else {})})
+        **({"Authorization": f"Bearer {tok}"} if (tok := token_for(path)) else {})})
     if not raw:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
