@@ -112,6 +112,8 @@ services:
     build: ./deploy-exporter
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}   # read access to the repos and their Actions; private repos need it
+      - GITHUB_TOKEN_UNCOVERTECHTALENT_GIT=${GITHUB_TOKEN_UNCOVERTECHTALENT_GIT:-}   # repos of the uncovertechtalent-git organisation (a fine-grained token covers one owner)
+      - GITHUB_TOKEN_OWNER=${GITHUB_TOKEN_OWNER:-uncovertechtalent}   # owner covered by GITHUB_TOKEN; each other owner needs its own line above
       - LOKI_URL=http://loki:3100
     volumes:
       - deploy_exporter_data:/data
