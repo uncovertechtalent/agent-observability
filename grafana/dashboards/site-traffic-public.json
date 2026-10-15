@@ -89,7 +89,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\"} | json [$__range]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\"} [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -132,7 +132,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\"} | json [$__range]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\"} [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -473,7 +473,7 @@
       "gridPos": {
         "x": 12,
         "y": 15,
-        "w": 6,
+        "w": 12,
         "h": 10
       },
       "id": 11
@@ -546,9 +546,9 @@
       "id": 12
     },
     {
-      "type": "table",
+      "type": "stat",
       "title": "Not found",
-      "description": "Paths that answered 404, bots included.",
+      "description": "Requests that answered 404, bots included. The paths are on the internal dashboard only: any request picks them.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -559,40 +559,9 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(25, sum by (site, path) (count_over_time({job=\"site-traffic\"} | json | status=\"404\" [$__range])))",
+          "expr": "sum(count_over_time({job=\"site-traffic\"} | json | status=\"404\" [$__range]))",
           "refId": "A",
           "queryType": "instant"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "indexByName": {
-              "site": 0,
-              "path": 1,
-              "Value #A": 2
-            },
-            "renameByName": {
-              "site": "Site",
-              "path": "Path",
-              "Value #A": "Requests"
-            }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Requests",
-                "desc": true
-              }
-            ]
-          }
         }
       ],
       "fieldConfig": {
@@ -603,8 +572,13 @@
         "overrides": []
       },
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
       },
       "gridPos": {
         "x": 12,

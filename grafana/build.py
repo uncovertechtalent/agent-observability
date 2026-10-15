@@ -1009,6 +1009,7 @@ def aws_spend():
                      "monthly budget, daily spend by service, top services, the last three months. Internal; not shared.",
                      p, refresh="15m", time_from="now-30d")
 
+
 def site_traffic(public=False):
     """Site traffic from the CloudFront access logs of the static sites (repo site-infra).
 
@@ -1016,13 +1017,17 @@ def site_traffic(public=False):
     {job="site-traffic", site, agent}. The logs record no IP address, and the shipper keeps no
     User-Agent string and no full referrer URL, only the agent class, the bot name and the
     referrer host. The public cut has no template variables (public dashboards ignore them)
-    and leaves out the referrers, which can name a visitor's intranet host.
+    and leaves out what a visitor or a scanner can write: referrer hosts (they can name an
+    intranet) and the paths of 404s (any request picks them); it counts 404s instead.
     """
     L = Layout()
     site = "" if public else ', site=~"$site"'
     human = f'{{job="site-traffic", agent="human"{site}}} | json'
     every = f'{{job="site-traffic"{site}}} | json'
     bots = f'{{job="site-traffic", agent="bot"{site}}} | json'
+    # Totals only count lines; the stream labels select them without parsing.
+    every_raw = f'{{job="site-traffic"{site}}}'
+    bots_raw = f'{{job="site-traffic", agent="bot"{site}}}'
 
     def ranked(title, expr, columns, value, description=""):
         """Counts as a table, largest first (a Loki instant query: Time, one column per label, Value #A)."""
@@ -1048,9 +1053,9 @@ def site_traffic(public=False):
     p = [L.row("Totals over the selected range")]
     p.append(L.place(total("Page views", f'sum(count_over_time({pages} [$__range]))',
                            "HTML pages served with status 200 to browsers. Bots, assets, redirects and errors excluded."), 6, 4))
-    p.append(L.place(total("Requests, all", f'sum(count_over_time({every} [$__range]))',
+    p.append(L.place(total("Requests, all", f'sum(count_over_time({every_raw} [$__range]))',
                            "Every request CloudFront logged: pages, assets, redirects, errors, bots."), 6, 4))
-    p.append(L.place(total("Bot requests", f'sum(count_over_time({bots} [$__range]))',
+    p.append(L.place(total("Bot requests", f'sum(count_over_time({bots_raw} [$__range]))',
                            "Requests whose User-Agent names a crawler, a script or nothing at all."), 6, 4))
     p.append(L.place(total("Countries", f'count(sum by (country) (count_over_time({pages} [$__range])))',
                            "Countries with at least one page view. CloudFront derives the country; no IP address is stored."), 6, 4))
@@ -1069,14 +1074,18 @@ def site_traffic(public=False):
     p.append(L.place(ranked("Top pages", f'topk(25, sum by (site, path) (count_over_time({pages} [$__range])))',
                             {"site": "Site", "path": "Page"}, "Views", "Most viewed pages over the selected range."), 12, 10))
     p.append(L.place(ranked("Countries", f'sum by (country) (count_over_time({pages} [$__range]))',
-                            {"country": "Country"}, "Views", "ISO 3166 country code CloudFront derives from the viewer address."), 6, 10))
+                            {"country": "Country"}, "Views", "ISO 3166 country code CloudFront derives from the viewer address."), 12 if public else 6, 10))
     if not public:
         p.append(L.place(ranked("Referrers", f'topk(25, sum by (referrer) (count_over_time({pages} | referrer!="internal" [$__range])))',
                                 {"referrer": "Referrer host"}, "Views", "Host of the referring page; direct = no referrer. Internal links are left out."), 6, 10))
     p.append(L.place(ranked("Crawlers and scripts", f'sum by (bot) (count_over_time({bots} [$__range]))',
                             {"bot": "Agent"}, "Requests", "Bot requests by the agent the User-Agent names. other = a generic bot pattern."), 12, 10))
-    p.append(L.place(ranked("Not found", f'topk(25, sum by (site, path) (count_over_time({every} | status="404" [$__range])))',
-                            {"site": "Site", "path": "Path"}, "Requests", "Paths that answered 404, bots included."), 12, 10))
+    if public:
+        p.append(L.place(total("Not found", f'sum(count_over_time({every} | status="404" [$__range]))',
+                               "Requests that answered 404, bots included. The paths are on the internal dashboard only: any request picks them."), 12, 10))
+    else:
+        p.append(L.place(ranked("Not found", f'topk(25, sum by (site, path) (count_over_time({every} | status="404" [$__range])))',
+                                {"site": "Site", "path": "Path"}, "Requests", "Paths that answered 404, bots included."), 12, 10))
 
     variables = () if public else (query_var("site", "Site", 'label_values({job="site-traffic"}, site)', ds=LOKI),)
     uid = "site-traffic-public" if public else "site-traffic"
