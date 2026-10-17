@@ -301,6 +301,16 @@ class PagerEventTest(unittest.TestCase):
         self.assertIsNone(self.rx.issue_url("../x"))
 
 
+class ExpiryTest(unittest.TestCase):
+    def test_header_parses_to_epoch_and_garbage_is_ignored(self):
+        gh = receiver.GitHub(token_file="/nonexistent")
+        gh.note_expiry("2026-11-16 15:40:00 UTC")
+        self.assertEqual(gh.token_expiry, int(datetime(2026, 11, 16, 15, 40, tzinfo=timezone.utc).timestamp()))
+        gh.note_expiry("soon")
+        gh.note_expiry(None)
+        self.assertEqual(gh.token_expiry, int(datetime(2026, 11, 16, 15, 40, tzinfo=timezone.utc).timestamp()))
+
+
 class HandlerTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -333,6 +343,9 @@ class HandlerTest(unittest.TestCase):
         self.assertEqual(self.post({"alerts": [alert(fp="cccccccccccccccc")]}), 500)
         with urllib.request.urlopen(self.url + "/healthz", timeout=5) as r:
             self.assertEqual(r.status, 200)
+        self.gh.token_expiry = 1794843600
+        with urllib.request.urlopen(self.url + "/metrics", timeout=5) as r:
+            self.assertIn(b"alert_issues_github_token_expiry_timestamp_seconds 1794843600", r.read())
 
 
 if __name__ == "__main__":

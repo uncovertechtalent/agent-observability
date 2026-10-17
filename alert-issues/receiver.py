@@ -63,6 +63,7 @@ class GitHub:
 
     def __init__(self, repo=REPO, token_file=TOKEN_FILE, api=API):
         self.repo, self.token_file, self.api = repo, token_file, api
+        self.token_expiry = None  # epoch seconds, from GitHub's header on a fine-grained token's responses
 
     def _token(self):
         try:
@@ -85,6 +86,7 @@ class GitHub:
         })
         with urllib.request.urlopen(req, timeout=20) as r:
             body = r.read()
+            self.note_expiry(r.headers.get("github-authentication-token-expiration"))
         return json.loads(body) if body else None
 
     def create_issue(self, title, body, labels):
@@ -104,6 +106,19 @@ class GitHub:
 
     def comment(self, number, body):
         self._call("POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body})
+
+    def note_expiry(self, header):
+        """GitHub sends e.g. '2026-11-16 15:40:00 UTC' on every response to a token that expires."""
+        if header:
+            try:
+                self.token_expiry = int(datetime.strptime(header.replace(" UTC", ""), "%Y-%m-%d %H:%M:%S")
+                                        .replace(tzinfo=timezone.utc).timestamp())
+            except ValueError:
+                pass
+
+    def check_access(self):
+        """One cheap read, hourly: refreshes the token's expiry and fails loudly on a revoked token."""
+        self._call("GET", f"/repos/{self.repo}")
 
     def find_issue(self, fingerprint):
         q = urllib.parse.quote(f'repo:{self.repo} is:issue in:body "{fingerprint}"')
@@ -406,6 +421,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             return self._reply(200, "ok\n")
+        if self.path == "/metrics":
+            expiry = getattr(self.receiver.gh, "token_expiry", None)
+            lines = ["# HELP alert_issues_github_token_expiry_timestamp_seconds When the GitHub token expires (from GitHub's header).",
+                     "# TYPE alert_issues_github_token_expiry_timestamp_seconds gauge"]
+            if expiry:
+                lines.append(f"alert_issues_github_token_expiry_timestamp_seconds {expiry}")
+            return self._reply(200, "\n".join(lines) + "\n")
         if self.path.startswith("/issues/"):  # for the pager's #tickets messages
             with self.lock:
                 url = self.receiver.issue_url(self.path[len("/issues/"):])
@@ -466,6 +488,7 @@ def sweeper(receiver):
         try:
             with Handler.lock:
                 done = receiver.sweep()
+                receiver.gh.check_access()
             if done:
                 log.info("sweep: %s", ", ".join(done))
         except Exception as e:  # GitHub down: the next sweep tries again
@@ -481,6 +504,10 @@ def main():
         log.warning("%s: every notification will fail until it is there", e)
     Handler.receiver = Receiver(gh, State())
     threading.Thread(target=sweeper, args=(Handler.receiver,), daemon=True).start()
+    try:
+        gh.check_access()  # learn the token's expiry now, not at the first alert
+    except Exception as e:
+        log.warning("GitHub check failed: %s: %s", type(e).__name__, e)
     log.info("alert-issues on :%d for %s", PORT, REPO)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
