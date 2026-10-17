@@ -101,6 +101,7 @@ receivers:
   - name: alerting-path
     discord_configs:
       - webhook_url_file: /etc/alertmanager/secrets/discord_webhook_url
+        username: Alerting path      # instead of the webhook's default name
         send_resolved: true
     webhook_configs:
       - url: http://alert-issues:9095/alerts
