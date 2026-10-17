@@ -1,0 +1,5 @@
+discord.py==2.7.1
+PyYAML==6.0.3
+# held back: releases younger than two weeks on 2026-10-17
+aiohttp==3.14.3
+multidict<7.1
