@@ -5,7 +5,8 @@ with a fixed clock. Every time is an aware datetime in UTC; the schedule is read
 
 The public view of an incident (public_view) is the one redacted shape that leaves the pager: the
 board issue's pager record uses it today, and a public feed channel could use it later. It holds
-names from rotation.yml and times, never a Discord ID, a channel or a token.
+names from rotation.yml and times, never a Discord ID, a channel or a token. It is stream v1, listed
+in the README: fields are only added; removing or renaming one makes v2.
 """
 
 import json

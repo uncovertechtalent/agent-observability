@@ -157,6 +157,21 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
 
 **A pager on Discord.** `pager/` is a small PagerDuty-style service. For each page it posts one message in the private server's pages channel, with Acknowledge, Resolve and Escalate buttons, and opens a thread under it for the timeline: fired, notified, re-notified, escalated, acknowledged by whom, resolved. Incidents are keyed by alert fingerprint, so a repeat refreshes the open incident, and Alertmanager's resolve closes it. Tickets get one message each in the tickets channel, linking their board issue. Who is on call and what happens without an acknowledgement come from `pager/rotation.yml`, in the same model as PagerDuty: schedules with layers (a later layer wins), overrides on top (in the file or with `/pager override`), and an escalation policy. The house default: the operator from 08:00 to 22:00 Berlin time, mentioned again every 5 minutes up to 3 times, and the responder agent at 15 minutes. Out of hours nobody is on the first layer, so the responder takes the page at once, and the operator hears at 08:00 if it is still open. The responder agent is deliberately small: it posts the alert's runbook link (`pager/runbooks.yml`) and a diagnosis from read-only Prometheus queries (the alert's expression, minutes firing in 24 hours, `up` of its job, the other alerts firing) into the thread. It changes nothing and never acknowledges. The pager sends the redacted record of each page (names and times, no Discord IDs) to `alert-issues`, which keeps it on the page's public board issue, so a public view needs no endpoint into the house. `/oncall` shows who is on call and the policy. The bot connects out to Discord: no port opens to the internet.
 
+**The redacted page record (stream v1).** The one shape that leaves the pager, built by `core.public_view` and sent to `alert-issues` on every change of a page; the board issue keeps it, and the public on-call snapshot on machinebehavior.io reads it from there. A later consumer, such as a public Discord server, takes the same record as one more sink. Fields are only ever added; removing or renaming one makes v2.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `alert` | string | alert name |
+| `severity` | string | the rule's severity (`page`) |
+| `prometheus` | string | the sending Prometheus's external label |
+| `fired` | UTC time `YYYY-MM-DDTHH:MM:SSZ` | when the pager opened the incident |
+| `acknowledged`, `resolved` | UTC time or null | when it was acknowledged, resolved |
+| `acknowledged_by`, `resolved_by` | name or null | a name from `rotation.yml`, or `Alertmanager`, or `Alertmanager (stale)` |
+| `responder_ran` | boolean | the responder agent posted its diagnosis |
+| `time_to_acknowledge_s`, `time_to_resolve_s` | integer or null | seconds from `fired` |
+
+It never carries a Discord ID, a channel, a label value, the summary or a URL.
+
 **Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. The pager cannot report its own outage, so `PagerDown`, `PagerDisconnected` and `AlertmanagerNotificationsFailing` go past it: to the alerting-path channel by webhook and to the board. The outside heartbeat check alarms into the same channel, from outside. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), the unit tests of the receiver and the pager, and the pager image's imports.
 
 **Span metrics.** Tempo's metrics generator writes RED metrics per span name back to Prometheus, so trace-derived latency can be graphed and alerted on next to everything else.
