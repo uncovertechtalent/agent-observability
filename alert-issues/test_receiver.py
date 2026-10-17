@@ -18,6 +18,8 @@ FP = "0123456789abcdef"
 
 
 class FakeGitHub:
+    repo = "o/board"
+
     def __init__(self):
         self.issues, self.comments, self.calls = {}, [], []
         self.fail = False
@@ -108,6 +110,15 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(self.gh.issues[1]["state"], "open")
         self.assertEqual(self.gh.comments[-1], (1, "Firing again since 2026-10-17 15:00 UTC."))
         self.assertEqual(len(self.gh.issues), 1)
+
+    def test_a_reopened_issue_closes_again_on_the_next_resolve(self):
+        self.rx.handle({"alerts": [alert()]})
+        self.rx.handle({"alerts": [alert("resolved", ends="2026-10-17T13:55:00Z")]})
+        self.rx.handle({"alerts": [alert(starts="2026-10-17T15:00:00Z")]})
+        out = self.rx.handle({"alerts": [alert("resolved", starts="2026-10-17T15:00:00Z", ends="2026-10-17T15:20:00Z")]})
+        self.assertEqual(out, ["closed #1"])
+        self.assertEqual(self.gh.issues[1]["state"], "closed")
+        self.assertEqual(self.gh.comments[-1], (1, "Resolved at 2026-10-17 15:20 UTC."))
 
     def test_issue_a_person_closed_stays_closed_in_the_same_episode(self):
         self.rx.handle({"alerts": [alert()]})
@@ -219,6 +230,96 @@ class ReceiverTest(unittest.TestCase):
             self.rx.handle({"alerts": [alert(status="weird")]})
 
 
+def view(**kw):
+    v = {"alert": "OllamaDown", "severity": "page", "prometheus": "agent-observability",
+         "fired": "2026-10-17T13:40:30Z", "acknowledged": None, "acknowledged_by": None, "resolved": None,
+         "resolved_by": None, "responder_ran": False, "time_to_acknowledge_s": None, "time_to_resolve_s": None}
+    v.update(kw)
+    return v
+
+
+class PagerEventTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "state.json")
+        self.gh = FakeGitHub()
+        self.rx = receiver.Receiver(self.gh, receiver.State(self.path), clock=lambda: NOW)
+        self.rx.handle({"alerts": [alert()]})
+        self.ep = "2026-10-17T13:40:00.123Z"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def event(self, **kw):
+        return self.rx.pager_event({"fingerprint": FP, "starts_at": self.ep, "pager": view(**kw)})
+
+    def record(self):
+        b = self.gh.issues[1]["body"]
+        return json.loads(b.split("<!-- pager-record ", 1)[1].split(" -->", 1)[0])
+
+    def test_record_lands_in_the_issue_and_survives_a_re_render(self):
+        self.assertEqual(self.event(), "#1 pager record updated")
+        self.assertEqual(self.record()[0]["alert"], "OllamaDown")
+        self.assertEqual(self.event(), "#1 unchanged")
+        self.rx.handle({"alerts": [alert()]})  # Alertmanager repeat re-renders the body
+        self.assertEqual(self.record()[0]["fired"], "2026-10-17T13:40:30Z")
+        self.assertEqual(self.gh.issues[1]["body"].count("<!-- pager:start -->"), 1)
+
+    def test_acknowledge_responder_and_resolve_comment_once_each(self):
+        self.event(acknowledged="2026-10-17T13:43:30Z", acknowledged_by="Stefan Coetzee", time_to_acknowledge_s=180)
+        self.event(acknowledged="2026-10-17T13:43:30Z", acknowledged_by="Stefan Coetzee", time_to_acknowledge_s=180,
+                   responder_ran=True, resolved="2026-10-17T14:00:30Z", resolved_by="Stefan Coetzee",
+                   time_to_resolve_s=1200)
+        notes = [c for _, c in self.gh.comments]
+        self.assertEqual(notes, ["Acknowledged in the pager by Stefan Coetzee, 3 min after it fired.",
+                                 "The responder agent posted its runbook link and read-only diagnosis in the pager.",
+                                 "Resolved in the pager by Stefan Coetzee."])
+        self.assertIn("acknowledged by Stefan Coetzee after 3 min", self.gh.issues[1]["body"])
+
+    def test_a_resolve_by_alertmanager_needs_no_comment_and_episodes_add_up(self):
+        self.event(resolved="2026-10-17T14:00:30Z", resolved_by="Alertmanager", time_to_resolve_s=1200)
+        self.assertEqual(self.gh.comments, [])
+        self.ep = "2026-10-18T09:00:00Z"
+        self.event(fired="2026-10-18T09:00:30Z")
+        self.assertEqual([v["fired"] for v in self.record()], ["2026-10-17T13:40:30Z", "2026-10-18T09:00:30Z"])
+
+    def test_unknown_alert_wrong_types_and_private_text_are_refused_or_scrubbed(self):
+        with self.assertRaises(LookupError):
+            self.rx.pager_event({"fingerprint": "aaaaaaaaaaaaaaaa", "starts_at": "x", "pager": view()})
+        with self.assertRaises(ValueError):
+            self.event(time_to_acknowledge_s="soon")
+        with self.assertRaises(ValueError):
+            self.event(responder_ran=1)
+        self.event(acknowledged_by="ops @someone at 10.1.2.3", acknowledged="2026-10-17T13:41:00Z", time_to_acknowledge_s=30)
+        b = self.gh.issues[1]["body"]
+        self.assertNotIn("@someone", b)
+        self.assertNotIn("10.1.2.3", b)
+
+    def test_episodes_are_capped(self):
+        for day in range(25):
+            self.ep = f"2026-11-{day + 1:02d}T09:00:00Z"
+            self.event(fired=f"2026-11-{day + 1:02d}T09:00:30Z")
+        record = self.record()
+        self.assertEqual(len(record), receiver.PAGER_EPISODES)
+        self.assertEqual(record[0]["fired"], "2026-11-06T09:00:30Z")
+        self.assertEqual(len(self.rx.state.get(FP)["pages"]), receiver.PAGER_EPISODES)
+
+    def test_issue_url_for_the_pager(self):
+        self.assertEqual(self.rx.issue_url(FP), "https://github.com/o/board/issues/1")
+        self.assertIsNone(self.rx.issue_url("bbbbbbbbbbbbbbbb"))
+        self.assertIsNone(self.rx.issue_url("../x"))
+
+
+class ExpiryTest(unittest.TestCase):
+    def test_header_parses_to_epoch_and_garbage_is_ignored(self):
+        gh = receiver.GitHub(token_file="/nonexistent")
+        gh.note_expiry("2026-11-16 15:40:00 UTC")
+        self.assertEqual(gh.token_expiry, int(datetime(2026, 11, 16, 15, 40, tzinfo=timezone.utc).timestamp()))
+        gh.note_expiry("soon")
+        gh.note_expiry(None)
+        self.assertEqual(gh.token_expiry, int(datetime(2026, 11, 16, 15, 40, tzinfo=timezone.utc).timestamp()))
+
+
 class HandlerTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -251,6 +352,9 @@ class HandlerTest(unittest.TestCase):
         self.assertEqual(self.post({"alerts": [alert(fp="cccccccccccccccc")]}), 500)
         with urllib.request.urlopen(self.url + "/healthz", timeout=5) as r:
             self.assertEqual(r.status, 200)
+        self.gh.token_expiry = 1794843600
+        with urllib.request.urlopen(self.url + "/metrics", timeout=5) as r:
+            self.assertIn(b"alert_issues_github_token_expiry_timestamp_seconds 1794843600", r.read())
 
 
 if __name__ == "__main__":

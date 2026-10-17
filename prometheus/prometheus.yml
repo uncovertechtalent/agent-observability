@@ -54,6 +54,16 @@ scrape_configs:
     static_configs:
       - targets: ["tempo:3200"]
 
+  # The ticket receiver: when its GitHub token expires.
+  - job_name: alert-issues
+    static_configs:
+      - targets: ["alert-issues:9095"]
+
+  # The Discord pager: connected or not, open and unacknowledged incidents.
+  - job_name: pager
+    static_configs:
+      - targets: ["pager:9096"]
+
   - job_name: alertmanager
     basic_auth:
       username: agent-observability

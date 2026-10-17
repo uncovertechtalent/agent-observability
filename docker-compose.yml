@@ -158,7 +158,7 @@ services:
       - ./alertmanager/data:/alertmanager
     ports:
       - "9093:9093"   # the NAS Prometheus sends its alerts here over the LAN
-    depends_on: [alert-issues]
+    depends_on: [alert-issues, pager]
     restart: unless-stopped
 
   # Alertmanager's ticket receiver: opens or updates one GitHub issue per alert on the board
@@ -177,6 +177,28 @@ services:
     expose: ["9095"]
     restart: unless-stopped
 
+  # PagerDuty-style pager on a private Discord server: an incident per page with Acknowledge,
+  # Resolve and Escalate buttons and a thread for its timeline, the rotation and escalation policy
+  # in pager/rotation.yml, and a responder agent that posts a read-only diagnosis. Compose network
+  # only: Alertmanager posts to it, and the bot connects out to Discord. The bot token is a file in
+  # ./pager/secrets (mode 600). PAGER_EXTRA_PROMETHEUS adds ",name=url" pairs for the responder.
+  pager:
+    build:
+      context: ./pager
+      args: {UID: "${ALERTMANAGER_UID:-1000}", GID: "${ALERTMANAGER_GID:-1000}"}
+    environment:
+      - ROTATION_FILE=/etc/pager/rotation.yml
+      - RUNBOOKS_FILE=/etc/pager/runbooks.yml
+      - DISCORD_TOKEN_FILE=/etc/pager/secrets/discord_bot_token
+      - ALERT_ISSUES_URL=http://alert-issues:9095
+      - PROMETHEUS_URLS=agent-observability=http://prometheus:9090${PAGER_EXTRA_PROMETHEUS:-}
+    volumes:
+      - ./pager:/etc/pager:ro
+      - pager_data:/data
+    expose: ["9096"]
+    depends_on: [alert-issues]
+    restart: unless-stopped
+
 volumes:
   alloy_data:
   prometheus_data:
@@ -186,3 +208,4 @@ volumes:
   deploy_exporter_data:
   aws_cost_exporter_data:
   alert_issues_data:
+  pager_data:

@@ -5,3 +5,4 @@ alertmanager/secrets/
 alertmanager/data/
 alert-issues/secrets/
 prometheus/secrets/
+pager/secrets/
