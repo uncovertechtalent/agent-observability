@@ -1,0 +1,99 @@
+# One Alertmanager for two Prometheus servers: this stack's (external label
+# prometheus="agent-observability") and the NAS monitoring stack's (prometheus="nas"), which
+# sends here over the LAN. Severity picks the receiver:
+#
+#   page    Discord in waking hours (08:00 to 22:00 Europe/Berlin), and always a ticket, so
+#           a page at night waits on the board and reaches Discord at 08:00 if it still fires
+#   ticket  alert-issues, which opens or updates one GitHub issue per alert on the board
+#   info    nowhere
+#
+# Watchdog always fires. Each Prometheus's Watchdog pings its own outside heartbeat check
+# every 5 minutes; the check alarms when the pings stop.
+#
+# Secrets are files in ./secrets (mode 600, git-ignored, never in this file):
+#   discord_webhook_url                 the Discord channel's webhook
+#   heartbeat_url_agent_observability   ping URL of the heartbeat check for this Prometheus
+#   heartbeat_url_nas                   ping URL of the heartbeat check for the NAS Prometheus
+#
+# Tests: scripts/check-alerting.sh (amtool routes for every rule's severity).
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: board              # anything no route below matches becomes a ticket
+  group_by: [alertname, prometheus]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 24h
+  routes:
+    # First, so it never reaches a person: only the heartbeat checks get it.
+    - matchers: [alertname="Watchdog"]
+      receiver: blackhole
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      routes:
+        - matchers: [prometheus="agent-observability"]
+          receiver: heartbeat-agent-observability
+        - matchers: [prometheus="nas"]
+          receiver: heartbeat-nas
+
+    # The AWS cost rules are a showcase: they evaluate and show their state on the AWS spend
+    # dashboard, and nothing delivers them (operator's call, 2026-10-09). Delete this route to
+    # deliver them as tickets.
+    - matchers: [alertname=~"AWSCost.+"]
+      receiver: blackhole
+
+    - matchers: [severity="info"]
+      receiver: blackhole
+
+    - matchers: [severity="page"]
+      receiver: discord
+      repeat_interval: 1h
+      active_time_intervals: [waking-hours]
+      continue: true           # and the next route: every page is also a ticket
+
+    # A ticket for every page, day and night. Muting this route by day would lose the
+    # resolved notification of a page that started at night, and leave its issue open.
+    - matchers: [severity=~"page|ticket"]
+      receiver: board
+
+# One cause, one alert: a down Ollama silences the SLO burns and symptoms behind it, a down
+# SearXNG the engine, latency and egress alerts. Only within the same Prometheus.
+inhibit_rules:
+  - source_matchers: [alertname="OllamaDown"]
+    target_matchers: [alertname=~"LocalLLM.+|ModelSpilledToCPU|OllamaExporterDown"]
+    equal: [prometheus]
+  - source_matchers: [alertname="SearXNGDown"]
+    target_matchers: [alertname=~"SearXNG.+"]
+    equal: [prometheus]
+
+time_intervals:
+  - name: waking-hours
+    time_intervals:
+      - times: [{start_time: "08:00", end_time: "22:00"}]
+        location: Europe/Berlin
+
+receivers:
+  - name: discord
+    discord_configs:
+      - webhook_url_file: /etc/alertmanager/secrets/discord_webhook_url
+        send_resolved: true
+
+  - name: board
+    webhook_configs:
+      - url: http://alert-issues:9095/alerts
+        send_resolved: true
+
+  - name: heartbeat-agent-observability
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/heartbeat_url_agent_observability
+        send_resolved: false
+
+  - name: heartbeat-nas
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/heartbeat_url_nas
+        send_resolved: false
+
+  - name: blackhole

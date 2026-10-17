@@ -32,6 +32,11 @@ flowchart LR
   S[searxng-exporter on the laptop] -- OTLP HTTP :4318 --> A
   W[site-infra shipper] -- CloudFront access logs, one line per request --> L
   P & L & T --> G[Grafana]
+  P -- alerts --> AM[Alertmanager]
+  NP[NAS Prometheus] -- alerts over the LAN --> AM
+  AM -- page, waking hours --> DC[Discord]
+  AM -- page and ticket --> AI[alert-issues] -- one issue per alert --> GHI[(board issues)]
+  AM -- Watchdog every 5 min --> HB[outside heartbeat check]
 ```
 
 ## Run it
@@ -51,6 +56,19 @@ docker compose up -d --build
 | ollama-exporter | 11435 | Metering proxy in front of Ollama |
 | deploy-exporter | 9201 | Website deploy runs to Loki, latest state as metrics |
 | aws-cost-exporter | 9202 (compose network only) | AWS spend and budget as metrics; reads the host's `~/.aws` read-only |
+| Alertmanager | 9093 | Routes alerts by severity, for this Prometheus and the NAS one |
+| alert-issues | 9095 (compose network only) | Alertmanager's ticket receiver: one GitHub issue per alert |
+
+Alert delivery needs four secrets, each a file of one line with mode 600, owned by the user in `ALERTMANAGER_UID` (default 1000). Without them the stack runs and the notifications fail, visibly, in the two services' logs.
+
+```bash
+mkdir -p -m 700 alertmanager/secrets alertmanager/data alert-issues/secrets
+umask 077
+read -rs v && printf %s "$v" > alertmanager/secrets/discord_webhook_url                # the channel's webhook
+read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_agent_observability  # ping URL, check 1
+read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_nas                  # ping URL, check 2
+read -rs v && printf %s "$v" > alert-issues/secrets/github_token                       # Issues read and write, one repo
+```
 
 Point Claude Code at the stack:
 
@@ -117,6 +135,10 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
   prom/prometheus:v3.5.0 test rules alerts_test.yml
 ```
 
+**Alerts reach a person.** One Alertmanager serves this stack's Prometheus and the NAS monitoring Prometheus, which sends over the LAN; each server's `external_labels` name it (`prometheus="agent-observability"` or `"nas"`). Severity picks the receiver. A `page` goes to Discord between 08:00 and 22:00 Europe/Berlin and always to the board as well, so a page at night waits as an issue and reaches Discord at 08:00 if it still fires. A `ticket` goes to `alert-issues`, which opens one GitHub issue per alert fingerprint (labels `kind:finding` and an `area:` label), refreshes it on repeats, closes it with a comment when the alert resolves and reopens it when the alert fires again; an issue a person closed stays closed for the rest of that firing episode. The board repository is public, so an issue carries the alert name, the summary and an allowlist of labels, never the description, the instance or the generator URL. `info` goes nowhere, and so do the AWS cost rules, which stay a dashboard showcase. Inhibition keeps one cause to one alert: a down Ollama silences the SLO burns behind it, a down SearXNG the SearXNG symptoms.
+
+**Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. `AlertmanagerNotificationsFailing` turns a notification Alertmanager gave up on into a ticket. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), and the receiver's unit tests.
+
 **Span metrics.** Tempo's metrics generator writes RED metrics per span name back to Prometheus, so trace-derived latency can be graphed and alerted on next to everything else.
 
 **Deploys read from the outside.** The exporter polls the GitHub Actions API and the sites' public JSON instead of pushing from inside the workflows. The site repos stay unchanged, no ingest endpoint is exposed, and a run that dies before any step can report is still recorded, as is a run the gate blocks. History goes to Loki at the time each run finished, so a fresh exporter backfills the last week (Loki's limit for old samples) and Grafana draws it at once; replayed lines are exact duplicates and Loki drops them. Job logs expire on GitHub after a while; older runs keep their timings but lose the per-check verdict. Tokens are fine-grained and read-only: the exporter needs Actions (read) and Metadata (read), nothing more. One token covers one owner, so the exporter takes `GITHUB_TOKEN` for the user's repos and `GITHUB_TOKEN_<OWNER>` for another owner's, for example `GITHUB_TOKEN_UNCOVERTECHTALENT_GIT`; each new owner also needs its own line in `docker-compose.yml`, and `GITHUB_TOKEN_OWNER` names the owner `GITHUB_TOKEN` covers. At startup the exporter logs which site lacks a token.
@@ -125,8 +147,10 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
 
 ```
 alloy/config.alloy               OTLP receive, scrub, batch, fan out
-prometheus/prometheus.yml        scrape jobs, OTLP settings
-prometheus/rules/                recording rules, SLO burn-rate and symptom alerts
+prometheus/prometheus.yml        scrape jobs, OTLP settings, external label, Alertmanager target
+prometheus/rules/                recording rules, SLO burn-rate and symptom alerts, Watchdog
+alertmanager/alertmanager.yml    routes by severity, inhibition, waking hours, receivers
+alert-issues/                    ticket receiver: one GitHub issue per alert
 prometheus/tests/                promtool unit tests
 loki/ tempo/                     single-binary configs, 90-day and 14-day retention
 loki/rules/                      Loki ruler: Claude Code hourly cost for the spend alert
@@ -139,6 +163,7 @@ client/claude-code.env           Claude Code telemetry settings
 client/searxng_exporter.py       SearXNG health, pushed as OTLP from the machine that runs it
 client/searxng-exporter.plist    launchd agent for it (macOS)
 scripts/load.sh                  demo load
+scripts/check-alerting.sh        promtool, amtool and route checks; receiver unit tests
 ```
 
 ## License
