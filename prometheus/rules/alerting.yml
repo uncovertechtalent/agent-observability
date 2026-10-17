@@ -1,0 +1,20 @@
+# The alerting path itself. Watchdog always fires; Alertmanager sends it to an outside heartbeat
+# check every 5 minutes, and the check alarms when the pings stop. A dead Prometheus, a dead
+# Alertmanager, a dead box and a dead uplink all stop them, and none of those can report itself.
+# Severity "none" keeps it off every route to a person. The NAS Prometheus carries the same rule.
+groups:
+  - name: alerting
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none}
+        annotations:
+          summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
+
+      # Notifications Alertmanager gave up on after its retries. A failing Discord or heartbeat
+      # webhook reaches the board this way; a failing board receiver shows here and in its logs.
+      - alert: AlertmanagerNotificationsFailing
+        expr: sum by (integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Alertmanager failed to deliver notifications through {{ $labels.integration }} in the last 15 minutes."

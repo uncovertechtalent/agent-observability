@@ -138,6 +138,45 @@ services:
     expose: ["9202"]
     restart: unless-stopped
 
+  # Routes the alerts of this stack's Prometheus and of the NAS monitoring Prometheus by
+  # severity: page to Discord in waking hours, page and ticket to a GitHub issue, info nowhere,
+  # Watchdog to the outside heartbeat checks. Every endpoint needs basic auth (secrets/web.yml),
+  # since a posted alert can end up as a public issue. Secrets are files in
+  # ./alertmanager/secrets (mode 600, git-ignored), so the container runs as the host user that
+  # owns them; state (silences, the notification log) goes to ./alertmanager/data.
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    user: "${ALERTMANAGER_UID:-1000}:${ALERTMANAGER_GID:-1000}"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:-http://localhost:9093}
+      - --web.config.file=/etc/alertmanager/secrets/web.yml
+      - --cluster.listen-address=   # one instance, no gossip port
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+      - ./alertmanager/data:/alertmanager
+    ports:
+      - "9093:9093"   # the NAS Prometheus sends its alerts here over the LAN
+    depends_on: [alert-issues]
+    restart: unless-stopped
+
+  # Alertmanager's ticket receiver: opens or updates one GitHub issue per alert on the board
+  # repository. Compose network only. The token is a file in ./alert-issues/secrets (mode 600):
+  # fine-grained, that one repository, Issues read and write.
+  alert-issues:
+    build:
+      context: ./alert-issues
+      args: {UID: "${ALERTMANAGER_UID:-1000}", GID: "${ALERTMANAGER_GID:-1000}"}
+    environment:
+      - GITHUB_REPO=${ALERT_ISSUES_REPO:-uncovertechtalent/machinebehavior.io}
+      - GITHUB_TOKEN_FILE=/secrets/github_token
+    volumes:
+      - ./alert-issues/secrets:/secrets:ro
+      - alert_issues_data:/data
+    expose: ["9095"]
+    restart: unless-stopped
+
 volumes:
   alloy_data:
   prometheus_data:
@@ -146,3 +185,4 @@ volumes:
   grafana_data:
   deploy_exporter_data:
   aws_cost_exporter_data:
+  alert_issues_data:

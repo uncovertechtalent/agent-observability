@@ -1,0 +1,45 @@
+# promtool test rules prometheus/tests/alerting_test.yml
+rule_files:
+  - ../rules/alerting.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Watchdog fires from the first evaluation, with no input at all.
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: none}
+            exp_annotations:
+              summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
+      - eval_time: 3h
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: none}
+            exp_annotations:
+              summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
+
+  # One Discord notification fails after its retries: a ticket, per integration; the webhook
+  # counter stays flat and stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="discord",reason="other"}'
+        values: '0x10 1x20'
+      - series: 'alertmanager_notifications_failed_total{integration="webhook",reason="other"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels: {severity: ticket, integration: discord}
+            exp_annotations:
+              summary: "Alertmanager failed to deliver notifications through discord in the last 15 minutes."
+      # 15 minutes after the last failure the window is clean again.
+      - eval_time: 27m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
