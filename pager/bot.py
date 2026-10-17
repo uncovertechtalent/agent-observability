@@ -505,10 +505,13 @@ def web_app(bot):
             with open(os.path.join(HEARTBEAT_DIR, f"heartbeat_url_{name.replace('-', '_')}")) as f:
                 url = f.read().strip()
         except OSError:
+            log.warning("heartbeat %s: no ping URL file", name)  # never log the URL itself
             return web.Response(status=404, text="no ping URL for this check\n")
         try:
             async with bot.session.get(url, headers={"User-Agent": "pager"}, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 ok = r.status < 300
+                if not ok:
+                    log.warning("heartbeat %s: check answered %d", name, r.status)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             log.warning("heartbeat %s: %s", name, type(e).__name__)
             ok = False

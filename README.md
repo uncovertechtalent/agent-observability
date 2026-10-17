@@ -74,6 +74,8 @@ read -rs v && printf %s "$v" > alert-issues/secrets/github_token                
 read -rs v && printf %s "$v" > pager/secrets/discord_bot_token                          # the pager bot's token
 ```
 
+Upgrading a stack from before the heartbeat relay: move the ping URLs first, so no heartbeat is lost: `mv alertmanager/secrets/heartbeat_url_* pager/secrets/`, then `docker compose up -d --build`.
+
 The pager's Discord bot needs no privileged intent. Invite it with the scopes `bot` and `applications.commands` and the permissions View Channels, Send Messages, Embed Links, Read Message History, Create Public Threads and Send Messages in Threads (integer 309237730304), and nothing more. On the server, a server admin runs `/pager setup` (the channels for pages, tickets and the alerting path) and `/pager iam` (links their account to a person in `pager/rotation.yml`), so no Discord ID is ever written down.
 
 Every Alertmanager endpoint needs basic auth, because an alert posted to it can end up as a public issue. Each Prometheus gets a user and a random password: the bcrypt hash goes into `alertmanager/secrets/web.yml`, the password into a file only the Prometheus container user (`nobody`, 65534) can read. For this stack's Prometheus:
