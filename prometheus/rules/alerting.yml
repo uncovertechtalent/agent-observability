@@ -11,8 +11,22 @@ groups:
         annotations:
           summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
 
-      # Notifications Alertmanager gave up on after its retries. A failing Discord or heartbeat
-      # webhook reaches the board this way; a failing board receiver shows here and in its logs.
+      # The pager service. Both go to #watchdog by webhook, past the pager (alertmanager.yml).
+      - alert: PagerDown
+        expr: up{job="pager"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: Prometheus cannot scrape the pager; pages reach neither Discord buttons nor escalation.
+      - alert: PagerDisconnected
+        expr: pager_discord_connected == 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: The pager runs but is not connected to Discord or has no channels set; pages wait in its database.
+
+      # Notifications Alertmanager gave up on after its retries. A failing pager, Discord or
+      # heartbeat webhook reaches #watchdog and the board this way.
       - alert: AlertmanagerNotificationsFailing
         expr: sum by (integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
         labels: {severity: ticket}

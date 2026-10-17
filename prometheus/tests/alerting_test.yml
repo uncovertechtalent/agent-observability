@@ -21,6 +21,33 @@ tests:
             exp_annotations:
               summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
 
+  # The pager stops answering scrapes: a page after 2 minutes. Connected again: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="pager", instance="pager:9096"}'
+        values: '1 0 0 0 0 1'
+      - series: 'pager_discord_connected{job="pager", instance="pager:9096"}'
+        values: '0x7 1x3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PagerDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PagerDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: pager, instance: "pager:9096"}
+            exp_annotations:
+              summary: Prometheus cannot scrape the pager; pages reach neither Discord buttons nor escalation.
+      - eval_time: 6m
+        alertname: PagerDisconnected
+        exp_alerts:
+          - exp_labels: {severity: page, job: pager, instance: "pager:9096"}
+            exp_annotations:
+              summary: The pager runs but is not connected to Discord or has no channels set; pages wait in its database.
+      - eval_time: 9m
+        alertname: PagerDisconnected
+        exp_alerts: []
+
   # One Discord notification fails after its retries: a ticket, per integration; the webhook
   # counter stays flat and stays quiet.
   - interval: 1m

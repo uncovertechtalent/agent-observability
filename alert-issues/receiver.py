@@ -176,7 +176,66 @@ def title(labels):
     return f"Alert: {scrub(labels.get('alertname', 'unnamed'), 100)}{suffix}"[:200]
 
 
-def body(alert, now):
+PAGER_FIELDS = {"alert": str, "severity": str, "prometheus": str, "fired": str, "acknowledged": str,
+                "acknowledged_by": str, "resolved": str, "resolved_by": str, "responder_ran": bool,
+                "time_to_acknowledge_s": int, "time_to_resolve_s": int}
+PAGER_START, PAGER_END = "<!-- pager:start -->", "<!-- pager:end -->"
+
+
+def span(seconds):
+    m = int(seconds or 0) // 60
+    return f"{m} min" if m < 120 else f"{m // 60} h {m % 60} min"
+
+
+def clean_view(view):
+    """The pager's redacted record of one page, checked field by field (see pager/core.py public_view)."""
+    if not isinstance(view, dict):
+        raise ValueError("pager record is not an object")
+    out = {}
+    for key, kind in PAGER_FIELDS.items():
+        value = view.get(key)
+        if value is None:
+            out[key] = None
+        elif not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            raise ValueError(f"pager.{key} has the wrong type")
+        else:
+            out[key] = scrub(value, 100) if kind is str else value
+    if not out["fired"]:
+        raise ValueError("pager.fired is missing")
+    return out
+
+
+def pager_block(pages):
+    """The board issue's pager section: one line per page of this alert, and the same records as
+    JSON in an HTML comment for the site build. Names and times only."""
+    if not pages:
+        return []
+    views = sorted(pages.values(), key=lambda v: v["fired"])
+    lines = [PAGER_START, "**Pager**", ""]
+    for v in views[-10:]:
+        parts = [f"fired {when(v['fired']) or v['fired']}"]
+        if v.get("acknowledged"):
+            parts.append(f"acknowledged by {v.get('acknowledged_by') or '?'} after {span(v.get('time_to_acknowledge_s'))}")
+        if v.get("responder_ran"):
+            parts.append("responder diagnosis posted")
+        if v.get("resolved"):
+            parts.append(f"resolved by {v.get('resolved_by') or '?'} after {span(v.get('time_to_resolve_s'))}")
+        lines.append("- " + ", ".join(parts))
+    record = json.dumps(views, separators=(",", ":"), sort_keys=True).replace("--", "-\\u002d")
+    return lines + ["", f"<!-- pager-record {record} -->", PAGER_END, ""]
+
+
+def with_pager_block(text, pages):
+    block = "\n".join(pager_block(pages))
+    if PAGER_START in text and PAGER_END in text:
+        head, rest = text.split(PAGER_START, 1)
+        tail = rest.split(PAGER_END, 1)[1].lstrip("\n")
+        return head + block + tail
+    marker = "Opened by `alert-issues`"
+    return text.replace(marker, block + marker, 1) if marker in text else text + "\n\n" + block
+
+
+def body(alert, now, pages=None):
     labels = alert.get("labels") or {}
     summary = (alert.get("annotations") or {}).get("summary", "")
     firing = alert.get("status") == "firing"
@@ -191,6 +250,7 @@ def body(alert, now):
         f"- Resolved: {when(alert.get('endsAt')) if not firing else 'not yet'}",
         f"- Last word from Alertmanager: {now.strftime('%Y-%m-%d %H:%M UTC')}",
         "",
+        *pager_block(pages),
         "Opened by `alert-issues`, the ticket receiver of Alertmanager "
         f"([on-call routing]({DOCS})). This issue closes when the alert resolves and reopens "
         "when it fires again.",
@@ -229,12 +289,16 @@ class Receiver:
             if m and m[1] == fp:
                 record["starts_at"] = m[2]
 
+        pages = (record or {}).get("pages")
+
         def seen(number, is_open):
-            self.state.put(fp, {"issue": number, "starts_at": starts_at, "open": is_open, "last_seen": now.isoformat()})
+            kept = self.state.get(fp) or {}
+            self.state.put(fp, {**kept, "issue": number, "starts_at": starts_at, "open": is_open,
+                                "last_seen": now.isoformat(), "swept": False})
 
         if status == "firing":
             if issue is None:
-                number = self.gh.create_issue(title(labels), body(alert, now), [KIND_LABEL, area_label(labels)])
+                number = self.gh.create_issue(title(labels), body(alert, now, pages), [KIND_LABEL, area_label(labels)])
                 seen(number, True)
                 return f"opened #{number}"
             number = issue["number"]
@@ -245,11 +309,11 @@ class Receiver:
                     return f"left #{number} closed"  # a person closed it during this episode
                 # State changes before comments: a retry after a failed comment loses the
                 # comment, never repeats it.
-                self.gh.update_issue(number, state="open", body=body(alert, now))
+                self.gh.update_issue(number, state="open", body=body(alert, now, pages))
                 seen(number, True)
                 self.gh.comment(number, f"Firing again since {when(starts_at) or 'now'}.")
                 return f"reopened #{number}"
-            self.gh.update_issue(number, body=body(alert, now))
+            self.gh.update_issue(number, body=body(alert, now, pages))
             seen(number, True)
             return f"updated #{number}"
 
@@ -260,12 +324,47 @@ class Receiver:
             if issue["state"] != "open":
                 seen(number, False)
                 return f"#{number} already closed"
-            self.gh.update_issue(number, state="closed", state_reason="completed", body=body(alert, now))
+            self.gh.update_issue(number, state="closed", state_reason="completed", body=body(alert, now, pages))
             seen(number, False)
             self.gh.comment(number, f"Resolved at {when(alert.get('endsAt')) or 'now'}.")
             return f"closed #{number}"
 
         raise ValueError(f"unknown status {status!r}")
+
+    def pager_event(self, payload):
+        """The pager's redacted record of a page: kept in the state and on the board issue, with a
+        comment when the page is acknowledged, handed to the responder, or resolved by a person."""
+        fp = str(payload.get("fingerprint", ""))
+        if not FINGERPRINT.fullmatch(fp):
+            raise ValueError(f"bad fingerprint {fp!r}")
+        episode = str(payload.get("starts_at") or "")[:40]
+        view = clean_view(payload.get("pager"))
+        record = self.state.get(fp)
+        if not record or not record.get("issue"):
+            raise LookupError(f"no issue for {fp}")
+        number = record["issue"]
+        pages = dict(record.get("pages") or {})
+        old = pages.get(episode) or {}
+        if old == view:
+            return f"#{number} unchanged"
+        issue = self.gh.get_issue(number)
+        if issue is None:
+            raise LookupError(f"issue #{number} is gone")
+        pages[episode] = view
+        self.state.put(fp, {**record, "pages": pages})
+        self.gh.update_issue(number, body=with_pager_block(issue.get("body") or "", pages))
+        if view["acknowledged"] and not old.get("acknowledged"):
+            self.gh.comment(number, f"Acknowledged in the pager by {view['acknowledged_by']}, "
+                                    f"{span(view['time_to_acknowledge_s'])} after it fired.")
+        if view["responder_ran"] and not old.get("responder_ran"):
+            self.gh.comment(number, "The responder agent posted its runbook link and read-only diagnosis in the pager.")
+        if view["resolved"] and not old.get("resolved") and view["resolved_by"] != "Alertmanager":
+            self.gh.comment(number, f"Resolved in the pager by {view['resolved_by']}.")
+        return f"#{number} pager record updated"
+
+    def issue_url(self, fingerprint):
+        record = self.state.get(fingerprint) if FINGERPRINT.fullmatch(fingerprint) else None
+        return f"https://github.com/{self.gh.repo}/issues/{record['issue']}" if record and record.get("issue") else None
 
     def sweep(self, stale_after=STALE_AFTER):
         """Close open issues that have heard nothing for longer than the board route's repeat
@@ -294,10 +393,10 @@ class Handler(BaseHTTPRequestHandler):
     receiver = None
     lock = threading.Lock()  # one notification at a time: no race between open and update
 
-    def _reply(self, code_, text):
+    def _reply(self, code_, text, content_type="text/plain"):
         data = text.encode()
         self.send_response(code_)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -305,9 +404,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             return self._reply(200, "ok\n")
+        if self.path.startswith("/issues/"):  # for the pager's #tickets messages
+            with self.lock:
+                url = self.receiver.issue_url(self.path[len("/issues/"):])
+            if url:
+                return self._reply(200, json.dumps({"url": url}) + "\n", "application/json")
         self._reply(404, "not found\n")
 
     def do_POST(self):
+        if self.path == "/events":
+            return self._events()
         if self.path != "/alerts":
             return self._reply(404, "not found\n")
         length = int(self.headers.get("Content-Length") or 0)
@@ -327,6 +433,25 @@ class Handler(BaseHTTPRequestHandler):
             log.error("failed: %s: %s", type(e).__name__, e)
             return self._reply(500, "failed\n")
         log.info("%s %s: %s", payload.get("receiver", "?"), payload.get("groupKey", "?"), ", ".join(results))
+        self._reply(200, "ok\n")
+
+    def _events(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if not 0 < length <= MAX_REQUEST:
+            return self._reply(400, "bad length\n")
+        try:
+            payload = json.loads(self.rfile.read(length))
+            with self.lock:
+                result = self.receiver.pager_event(payload)
+        except LookupError:
+            return self._reply(404, "no issue yet\n")
+        except (ValueError, AttributeError) as e:
+            log.warning("pager event rejected: %s", e)
+            return self._reply(400, "bad payload\n")
+        except Exception as e:
+            log.error("pager event failed: %s: %s", type(e).__name__, e)
+            return self._reply(500, "failed\n")
+        log.info("pager: %s", result)
         self._reply(200, "ok\n")
 
     def log_message(self, *args):

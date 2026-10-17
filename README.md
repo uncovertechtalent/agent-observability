@@ -34,8 +34,10 @@ flowchart LR
   P & L & T --> G[Grafana]
   P -- alerts --> AM[Alertmanager]
   NP[NAS Prometheus] -- alerts over the LAN --> AM
-  AM -- page, waking hours --> DC[Discord]
+  AM -- page --> PG[pager] -- incident, buttons, thread --> DC[private Discord server]
+  PG -- read-only queries --> P
   AM -- page and ticket --> AI[alert-issues] -- one issue per alert --> GHI[(board issues)]
+  PG -- redacted page record --> AI
   AM -- Watchdog every 5 min --> HB[outside heartbeat check]
 ```
 
@@ -58,6 +60,7 @@ docker compose up -d --build
 | aws-cost-exporter | 9202 (compose network only) | AWS spend and budget as metrics; reads the host's `~/.aws` read-only |
 | Alertmanager | 9093 | Routes alerts by severity, for this Prometheus and the NAS one; basic auth on every endpoint |
 | alert-issues | 9095 (compose network only) | Alertmanager's ticket receiver: one GitHub issue per alert |
+| pager | 9096 (compose network only) | PagerDuty-style pager on a private Discord server: incidents, rotation, escalation |
 
 Alert delivery needs secrets, each a file with mode 600, owned by the user in `ALERTMANAGER_UID` (default 1000). Without the four delivery secrets the stack runs and the notifications fail, visibly, in the two services' logs; without `web.yml` Alertmanager does not start.
 
@@ -68,7 +71,11 @@ read -rs v && printf %s "$v" > alertmanager/secrets/discord_webhook_url         
 read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_agent_observability  # ping URL, check 1
 read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_nas                  # ping URL, check 2
 read -rs v && printf %s "$v" > alert-issues/secrets/github_token                       # Issues read and write, one repo
+mkdir -p -m 700 pager/secrets
+read -rs v && printf %s "$v" > pager/secrets/discord_bot_token                          # the pager bot's token
 ```
+
+The pager's Discord bot needs no privileged intent. Invite it with the scopes `bot` and `applications.commands` and the permissions View Channels, Send Messages, Embed Links, Read Message History, Create Public Threads and Send Messages in Threads (integer 309237730304), and nothing more. On the server, a server admin runs `/pager setup` (the channels for pages, tickets and the alerting path) and `/pager iam` (links their account to a person in `pager/rotation.yml`), so no Discord ID is ever written down.
 
 Every Alertmanager endpoint needs basic auth, because an alert posted to it can end up as a public issue. Each Prometheus gets a user and a random password: the bcrypt hash goes into `alertmanager/secrets/web.yml`, the password into a file only the Prometheus container user (`nobody`, 65534) can read. For this stack's Prometheus:
 
@@ -146,9 +153,11 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
   prom/prometheus:v3.5.0 test rules alerts_test.yml
 ```
 
-**Alerts reach a person.** One Alertmanager serves this stack's Prometheus and the NAS monitoring Prometheus, which sends over the LAN; each server's `external_labels` name it (`prometheus="agent-observability"` or `"nas"`). Severity picks the receiver. A `page` goes to Discord between 08:00 and 22:00 Europe/Berlin and always to the board as well, so a page at night waits as an issue and reaches Discord at 08:00 if it still fires. A `ticket` goes to `alert-issues`, which opens one GitHub issue per alert fingerprint (labels `kind:finding` and an `area:` label), refreshes it on repeats, closes it with a comment when the alert resolves and reopens it when the alert fires again; an issue a person closed stays closed for the rest of that firing episode. The board repository is public, so an issue carries the alert name, the summary and an allowlist of labels, never the description, the instance or the generator URL. `info` goes nowhere, and so do the three AWS spend rules, which stay a dashboard showcase; `AWSCostExporterStale` is a ticket. Discord can keep showing a page as firing: a page that resolves outside waking hours sends its resolved message nowhere, so the board issue is the record. It closes when the alert resolves, or after 25 hours with no word from Alertmanager, since an alert that resolves while inhibited or silenced sends no resolved notification; the next firing reopens it. Inhibition keeps one cause to one alert: a down Ollama silences the SLO burns behind it, a down SearXNG the SearXNG symptoms.
+**Alerts reach a person.** One Alertmanager serves this stack's Prometheus and the NAS monitoring Prometheus, which sends over the LAN; each server's `external_labels` name it (`prometheus="agent-observability"` or `"nas"`). Severity picks the receiver. A `page` goes to the pager and always to the board as well. A `ticket` goes to `alert-issues`, which opens one GitHub issue per alert fingerprint (labels `kind:finding` and an `area:` label), refreshes it on repeats, closes it with a comment when the alert resolves and reopens it when the alert fires again; an issue a person closed stays closed for the rest of that firing episode. The board repository is public, so an issue carries the alert name, the summary and an allowlist of labels, never the description, the instance or the generator URL. `info` goes nowhere, and so do the three AWS spend rules, which stay a dashboard showcase; `AWSCostExporterStale` is a ticket. A board issue closes when the alert resolves, or after 25 hours with no word from Alertmanager, since an alert that resolves while inhibited or silenced sends no resolved notification; the next firing reopens it. Inhibition keeps one cause to one alert: a down Ollama silences the SLO burns behind it, a down SearXNG the SearXNG symptoms.
 
-**Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. `AlertmanagerNotificationsFailing` turns a notification Alertmanager gave up on into a ticket. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), and the receiver's unit tests.
+**A pager on Discord.** `pager/` is a small PagerDuty-style service. For each page it posts one message in the private server's pages channel, with Acknowledge, Resolve and Escalate buttons, and opens a thread under it for the timeline: fired, notified, re-notified, escalated, acknowledged by whom, resolved. Incidents are keyed by alert fingerprint, so a repeat refreshes the open incident, and Alertmanager's resolve closes it. Tickets get one message each in the tickets channel, linking their board issue. Who is on call and what happens without an acknowledgement come from `pager/rotation.yml`, in the same model as PagerDuty: schedules with layers (a later layer wins), overrides on top (in the file or with `/pager override`), and an escalation policy. The house default: the operator from 08:00 to 22:00 Berlin time, mentioned again every 5 minutes up to 3 times, and the responder agent at 15 minutes. Out of hours nobody is on the first layer, so the responder takes the page at once, and the operator hears at 08:00 if it is still open. The responder agent is deliberately small: it posts the alert's runbook link (`pager/runbooks.yml`) and a diagnosis from read-only Prometheus queries (the alert's expression, minutes firing in 24 hours, `up` of its job, the other alerts firing) into the thread. It changes nothing and never acknowledges. The pager sends the redacted record of each page (names and times, no Discord IDs) to `alert-issues`, which keeps it on the page's public board issue, so a public view needs no endpoint into the house. `/oncall` shows who is on call and the policy. The bot connects out to Discord: no port opens to the internet.
+
+**Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. The pager cannot report its own outage, so `PagerDown`, `PagerDisconnected` and `AlertmanagerNotificationsFailing` go past it: to the alerting-path channel by webhook and to the board. The outside heartbeat check alarms into the same channel, from outside. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), the unit tests of the receiver and the pager, and the pager image's imports.
 
 **Span metrics.** Tempo's metrics generator writes RED metrics per span name back to Prometheus, so trace-derived latency can be graphed and alerted on next to everything else.
 
@@ -162,6 +171,8 @@ prometheus/prometheus.yml        scrape jobs, OTLP settings, external label, Ale
 prometheus/rules/                recording rules, SLO burn-rate and symptom alerts, Watchdog
 alertmanager/alertmanager.yml    routes by severity, inhibition, waking hours, receivers
 alert-issues/                    ticket receiver: one GitHub issue per alert
+pager/                           Discord pager: core.py (schedule, escalation, incidents), bot.py, diagnose.py
+pager/rotation.yml               who is on call, overrides, the escalation policy
 prometheus/tests/                promtool unit tests
 loki/ tempo/                     single-binary configs, 90-day and 14-day retention
 loki/rules/                      Loki ruler: Claude Code hourly cost for the spend alert

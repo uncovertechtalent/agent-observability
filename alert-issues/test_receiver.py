@@ -18,6 +18,8 @@ FP = "0123456789abcdef"
 
 
 class FakeGitHub:
+    repo = "o/board"
+
     def __init__(self):
         self.issues, self.comments, self.calls = {}, [], []
         self.fail = False
@@ -217,6 +219,77 @@ class ReceiverTest(unittest.TestCase):
             self.rx.handle({"nope": 1})
         with self.assertRaises(ValueError):
             self.rx.handle({"alerts": [alert(status="weird")]})
+
+
+def view(**kw):
+    v = {"alert": "OllamaDown", "severity": "page", "prometheus": "agent-observability",
+         "fired": "2026-10-17T13:40:30Z", "acknowledged": None, "acknowledged_by": None, "resolved": None,
+         "resolved_by": None, "responder_ran": False, "time_to_acknowledge_s": None, "time_to_resolve_s": None}
+    v.update(kw)
+    return v
+
+
+class PagerEventTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "state.json")
+        self.gh = FakeGitHub()
+        self.rx = receiver.Receiver(self.gh, receiver.State(self.path), clock=lambda: NOW)
+        self.rx.handle({"alerts": [alert()]})
+        self.ep = "2026-10-17T13:40:00.123Z"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def event(self, **kw):
+        return self.rx.pager_event({"fingerprint": FP, "starts_at": self.ep, "pager": view(**kw)})
+
+    def record(self):
+        b = self.gh.issues[1]["body"]
+        return json.loads(b.split("<!-- pager-record ", 1)[1].split(" -->", 1)[0])
+
+    def test_record_lands_in_the_issue_and_survives_a_re_render(self):
+        self.assertEqual(self.event(), "#1 pager record updated")
+        self.assertEqual(self.record()[0]["alert"], "OllamaDown")
+        self.assertEqual(self.event(), "#1 unchanged")
+        self.rx.handle({"alerts": [alert()]})  # Alertmanager repeat re-renders the body
+        self.assertEqual(self.record()[0]["fired"], "2026-10-17T13:40:30Z")
+        self.assertEqual(self.gh.issues[1]["body"].count("<!-- pager:start -->"), 1)
+
+    def test_acknowledge_responder_and_resolve_comment_once_each(self):
+        self.event(acknowledged="2026-10-17T13:43:30Z", acknowledged_by="Stefan Coetzee", time_to_acknowledge_s=180)
+        self.event(acknowledged="2026-10-17T13:43:30Z", acknowledged_by="Stefan Coetzee", time_to_acknowledge_s=180,
+                   responder_ran=True, resolved="2026-10-17T14:00:30Z", resolved_by="Stefan Coetzee",
+                   time_to_resolve_s=1200)
+        notes = [c for _, c in self.gh.comments]
+        self.assertEqual(notes, ["Acknowledged in the pager by Stefan Coetzee, 3 min after it fired.",
+                                 "The responder agent posted its runbook link and read-only diagnosis in the pager.",
+                                 "Resolved in the pager by Stefan Coetzee."])
+        self.assertIn("acknowledged by Stefan Coetzee after 3 min", self.gh.issues[1]["body"])
+
+    def test_a_resolve_by_alertmanager_needs_no_comment_and_episodes_add_up(self):
+        self.event(resolved="2026-10-17T14:00:30Z", resolved_by="Alertmanager", time_to_resolve_s=1200)
+        self.assertEqual(self.gh.comments, [])
+        self.ep = "2026-10-18T09:00:00Z"
+        self.event(fired="2026-10-18T09:00:30Z")
+        self.assertEqual([v["fired"] for v in self.record()], ["2026-10-17T13:40:30Z", "2026-10-18T09:00:30Z"])
+
+    def test_unknown_alert_wrong_types_and_private_text_are_refused_or_scrubbed(self):
+        with self.assertRaises(LookupError):
+            self.rx.pager_event({"fingerprint": "aaaaaaaaaaaaaaaa", "starts_at": "x", "pager": view()})
+        with self.assertRaises(ValueError):
+            self.event(time_to_acknowledge_s="soon")
+        with self.assertRaises(ValueError):
+            self.event(responder_ran=1)
+        self.event(acknowledged_by="ops @someone at 10.1.2.3", acknowledged="2026-10-17T13:41:00Z", time_to_acknowledge_s=30)
+        b = self.gh.issues[1]["body"]
+        self.assertNotIn("@someone", b)
+        self.assertNotIn("10.1.2.3", b)
+
+    def test_issue_url_for_the_pager(self):
+        self.assertEqual(self.rx.issue_url(FP), "https://github.com/o/board/issues/1")
+        self.assertIsNone(self.rx.issue_url("bbbbbbbbbbbbbbbb"))
+        self.assertIsNone(self.rx.issue_url("../x"))
 
 
 class HandlerTest(unittest.TestCase):

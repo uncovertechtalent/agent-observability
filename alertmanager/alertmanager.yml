@@ -2,18 +2,21 @@
 # prometheus="agent-observability") and the NAS monitoring stack's (prometheus="nas"), which
 # sends here over the LAN. Severity picks the receiver:
 #
-#   page    Discord in waking hours (08:00 to 22:00 Europe/Berlin), and always a ticket, so
-#           a page at night waits on the board and reaches Discord at 08:00 if it still fires
-#   ticket  alert-issues, which opens or updates one GitHub issue per alert on the board
+#   page    the pager: an incident on the private Discord server with Acknowledge, Resolve and
+#           Escalate buttons; who is on call and when it escalates come from pager/rotation.yml.
+#           Every page is also a ticket.
+#   ticket  alert-issues (one GitHub issue per alert on the board) and the pager's #tickets
 #   info    nowhere
 #
-# Watchdog always fires. Each Prometheus's Watchdog pings its own outside heartbeat check
-# every 5 minutes; the check alarms when the pings stop.
+# The alerting path watches itself apart from the pager: a down or disconnected pager and a
+# failed delivery go to #watchdog by webhook and to the board, never through the pager. Watchdog
+# always fires; each Prometheus's Watchdog pings its own outside heartbeat check every 5 minutes,
+# and the check alarms when the pings stop.
 #
 # Secrets are files in ./secrets (mode 600, git-ignored, never in this file):
 #   web.yml                             basic auth on every endpoint, one bcrypt user per
 #                                       Prometheus (agent-observability, nas)
-#   discord_webhook_url                 the Discord channel's webhook
+#   discord_webhook_url                 the #watchdog channel's webhook
 #   heartbeat_url_agent_observability   ping URL of the heartbeat check for this Prometheus
 #   heartbeat_url_nas                   ping URL of the heartbeat check for the NAS Prometheus
 #
@@ -41,6 +44,12 @@ route:
         - matchers: [prometheus="nas"]
           receiver: heartbeat-nas
 
+    # The alerting path itself, past the pager: it cannot report its own outage.
+    - matchers: [alertname=~"PagerDown|PagerDisconnected|AlertmanagerNotificationsFailing"]
+      receiver: alerting-path
+      group_wait: 0s
+      repeat_interval: 1h
+
     # The three AWS spend rules are a showcase: they evaluate and show their state on the AWS
     # spend dashboard, and nothing delivers them (operator's call, 2026-10-09). Delete this route
     # to deliver them as tickets. AWSCostExporterStale is exporter health, and stays a ticket.
@@ -50,19 +59,21 @@ route:
     - matchers: [severity="info"]
       receiver: blackhole
 
+    # The pager dedups by fingerprint, so an hourly repeat only refreshes the open incident.
     - matchers: [severity="page"]
-      receiver: discord
+      receiver: pager
+      group_wait: 10s
+      group_interval: 1m       # a resolve or a new alert in the group reaches the pager within a minute
       repeat_interval: 1h
-      active_time_intervals: [waking-hours]
       continue: true           # and the next route: every page is also a ticket
 
-    # A ticket for every page, day and night. Muting this route by day would lose the
-    # resolved notification of a page that started at night, and leave its issue open.
     - matchers: [severity=~"page|ticket"]
       receiver: board
 
 # One cause, one alert: a down Ollama silences the SLO burns and symptoms behind it, a down
-# SearXNG the engine, latency and egress alerts. Only within the same Prometheus.
+# SearXNG the engine, latency and egress alerts, a down pager its disconnect. Only within the
+# same Prometheus. An alert that resolves while inhibited sends no resolve; alert-issues sweeps
+# such issues closed after 25 hours.
 inhibit_rules:
   - source_matchers: [alertname="OllamaDown"]
     target_matchers: [alertname=~"LocalLLM.+|ModelSpilledToCPU|OllamaExporterDown"]
@@ -70,20 +81,27 @@ inhibit_rules:
   - source_matchers: [alertname="SearXNGDown"]
     target_matchers: [alertname=~"SearXNG.+"]
     equal: [prometheus]
-
-time_intervals:
-  - name: waking-hours
-    time_intervals:
-      - times: [{start_time: "08:00", end_time: "22:00"}]
-        location: Europe/Berlin
+  - source_matchers: [alertname="PagerDown"]
+    target_matchers: [alertname="PagerDisconnected"]
+    equal: [prometheus]
 
 receivers:
-  - name: discord
-    discord_configs:
-      - webhook_url_file: /etc/alertmanager/secrets/discord_webhook_url
+  - name: pager
+    webhook_configs:
+      - url: http://pager:9096/alerts/page
         send_resolved: true
 
   - name: board
+    webhook_configs:
+      - url: http://alert-issues:9095/alerts
+        send_resolved: true
+      - url: http://pager:9096/alerts/ticket
+        send_resolved: true
+
+  - name: alerting-path
+    discord_configs:
+      - webhook_url_file: /etc/alertmanager/secrets/discord_webhook_url
+        send_resolved: true
     webhook_configs:
       - url: http://alert-issues:9095/alerts
         send_resolved: true
