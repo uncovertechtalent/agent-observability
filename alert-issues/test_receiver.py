@@ -111,6 +111,15 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(self.gh.comments[-1], (1, "Firing again since 2026-10-17 15:00 UTC."))
         self.assertEqual(len(self.gh.issues), 1)
 
+    def test_a_reopened_issue_closes_again_on_the_next_resolve(self):
+        self.rx.handle({"alerts": [alert()]})
+        self.rx.handle({"alerts": [alert("resolved", ends="2026-10-17T13:55:00Z")]})
+        self.rx.handle({"alerts": [alert(starts="2026-10-17T15:00:00Z")]})
+        out = self.rx.handle({"alerts": [alert("resolved", starts="2026-10-17T15:00:00Z", ends="2026-10-17T15:20:00Z")]})
+        self.assertEqual(out, ["closed #1"])
+        self.assertEqual(self.gh.issues[1]["state"], "closed")
+        self.assertEqual(self.gh.comments[-1], (1, "Resolved at 2026-10-17 15:20 UTC."))
+
     def test_issue_a_person_closed_stays_closed_in_the_same_episode(self):
         self.rx.handle({"alerts": [alert()]})
         self.gh.issues[1]["state"] = "closed"
