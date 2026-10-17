@@ -38,7 +38,8 @@ flowchart LR
   PG -- read-only queries --> P
   AM -- page and ticket --> AI[alert-issues] -- one issue per alert --> GHI[(board issues)]
   PG -- redacted page record --> AI
-  AM -- Watchdog every 5 min --> HB[outside heartbeat check]
+  AM -- Watchdog --> PG
+  PG -- empty ping every 5 min --> HB[outside heartbeat check]
 ```
 
 ## Run it
