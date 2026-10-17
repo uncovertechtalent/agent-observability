@@ -3,11 +3,14 @@
     docker run --rm -v "$PWD/pager:/src:ro" -w /src <pager image> python -m unittest test_bot
 """
 
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 
 import discord
 import yaml
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 import bot
@@ -90,6 +93,42 @@ class BotTest(unittest.IsolatedAsyncioTestCase):
                          ["the bot lacks create public threads, send messages in threads"])
         self.assertEqual(bot.channel_problems("watchdog", private, private),
                          ["the bot lacks view channel, send messages, embed links, read message history"])
+
+    async def test_heartbeat_forwards_an_empty_ping_and_keeps_alertmanagers_body(self):
+        seen = []
+
+        async def ping(request):
+            seen.append((request.method, len(await request.read())))
+            return web.Response(text="OK" if request.path == "/up" else "nope", status=200 if request.path == "/up" else 500)
+        check = TestServer(web.Application())
+        check.app.router.add_route("*", "/{path}", ping)
+        await check.start_server()
+        self.addAsyncCleanup(check.close)
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        with open(os.path.join(d.name, "heartbeat_url_agent_observability"), "w") as f:
+            f.write(str(check.make_url("/up")))
+        with open(os.path.join(d.name, "heartbeat_url_nas"), "w") as f:
+            f.write(str(check.make_url("/down")))
+        old, bot.HEARTBEAT_DIR = bot.HEARTBEAT_DIR, d.name
+        self.addCleanup(setattr, bot, "HEARTBEAT_DIR", old)
+        b = make_bot()
+        self.addCleanup(b.store.close)
+        import aiohttp
+        b.session = aiohttp.ClientSession()
+        self.addAsyncCleanup(b.session.close)
+        client = TestClient(TestServer(bot.web_app(b)))
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+        body = {"externalURL": "http://192.0.2.1:9093", "alerts": [{"labels": {"alertname": "Watchdog"}}]}
+        self.assertEqual((await client.post("/heartbeat/agent-observability", json=body)).status, 200)
+        self.assertEqual(seen, [("GET", 0)])
+        self.assertEqual((await client.post("/heartbeat/nas", json=body)).status, 502)
+        self.assertEqual((await client.post("/heartbeat/missing", json=body)).status, 404)
+        self.assertEqual((await client.post("/heartbeat/..%2Fetc", json=body)).status, 404)
+        metrics = await (await client.get("/metrics")).text()
+        self.assertIn('pager_heartbeat_last_ping_timestamp_seconds{name="agent-observability"}', metrics)
+        self.assertNotIn('name="nas"', metrics)
 
     async def test_webhook_opens_and_resolves_and_metrics_count(self):
         b = make_bot()

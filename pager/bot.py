@@ -14,6 +14,8 @@ for no privileged intent and reads no message text.
 import asyncio
 import logging
 import os
+import re
+import time
 from datetime import timedelta
 
 import aiohttp
@@ -37,6 +39,9 @@ ALERT_ISSUES = os.environ.get("ALERT_ISSUES_URL", "http://alert-issues:9095")
 PROMETHEUS = dict(pair.split("=", 1) for pair in
                   os.environ.get("PROMETHEUS_URLS", "agent-observability=http://prometheus:9090").split(",") if "=" in pair)
 TICK_SECONDS = 15
+# The outside heartbeat checks' ping URLs, one file per Prometheus: heartbeat_url_<name with _ for ->.
+HEARTBEAT_DIR = os.environ.get("HEARTBEAT_DIR", "/etc/pager/secrets")
+HEARTBEAT_NAME = re.compile(r"[a-z0-9-]{1,40}")
 COLOURS = {"triggered": 0xD93F3F, "acknowledged": 0xE8A33D, "resolved": 0x3BA55C}
 CHANNELS = ("page", "ticket", "watchdog")
 # What the bot needs in each channel; the invite grants these server-wide, a private channel must grant them again.
@@ -104,6 +109,7 @@ class PagerBot(discord.Client):
         self.session = None  # aiohttp, for Prometheus and alert-issues; discord.Client owns self.http
         self.issue_tries = {}
         self.errors = 0  # failed Discord calls; PagerFailing alerts on its increase
+        self.heartbeats = {}  # name -> time of the last ping the outside check accepted
         add_commands(self)
 
     # ------------------------------------------------------------ lifecycle
@@ -474,6 +480,9 @@ def web_app(bot):
         lines += ["# HELP pager_tick_errors_total Discord calls that failed for one incident (post, update, timeline, action).",
                   "# TYPE pager_tick_errors_total counter",
                   f"pager_tick_errors_total {bot.errors}"]
+        lines += ["# HELP pager_heartbeat_last_ping_timestamp_seconds Last ping the outside heartbeat check accepted.",
+                  "# TYPE pager_heartbeat_last_ping_timestamp_seconds gauge"]
+        lines += [f'pager_heartbeat_last_ping_timestamp_seconds{{name="{n}"}} {t:.0f}' for n, t in sorted(bot.heartbeats.items())]
         lines += ["# HELP pager_incidents_unacknowledged Open pages nobody acknowledged.",
                   "# TYPE pager_incidents_unacknowledged gauge",
                   f"pager_incidents_unacknowledged {sum(i.status == 'triggered' for i in bot.store.open_incidents('page'))}"]
@@ -485,6 +494,29 @@ def web_app(bot):
     async def tickets(request):
         return await alerts(request, "ticket")
 
+    async def heartbeat(request):
+        """Alertmanager's Watchdog notification in, an empty GET to the outside check out. Alertmanager's
+        JSON (its address, the generator URL, labels) stays in the house; the check sees only the ping."""
+        name = request.match_info["name"]
+        await request.read()  # read and drop the body
+        if not HEARTBEAT_NAME.fullmatch(name):
+            return web.Response(status=404, text="no such check\n")
+        try:
+            with open(os.path.join(HEARTBEAT_DIR, f"heartbeat_url_{name.replace('-', '_')}")) as f:
+                url = f.read().strip()
+        except OSError:
+            return web.Response(status=404, text="no ping URL for this check\n")
+        try:
+            async with bot.session.get(url, headers={"User-Agent": "pager"}, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                ok = r.status < 300
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            log.warning("heartbeat %s: %s", name, type(e).__name__)
+            ok = False
+        if not ok:
+            return web.Response(status=502, text="the check did not take the ping\n")  # Alertmanager retries
+        bot.heartbeats[name] = time.time()
+        return web.Response(text="ok\n")
+
     async def healthz(request):
         return web.Response(text="ok\n")
 
@@ -493,6 +525,7 @@ def web_app(bot):
     app.router.add_post("/alerts/ticket", tickets)
     app.router.add_get("/metrics", metrics)
     app.router.add_get("/healthz", healthz)
+    app.router.add_post("/heartbeat/{name}", heartbeat)
     return app
 
 
