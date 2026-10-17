@@ -39,6 +39,24 @@ PROMETHEUS = dict(pair.split("=", 1) for pair in
 TICK_SECONDS = 15
 COLOURS = {"triggered": 0xD93F3F, "acknowledged": 0xE8A33D, "resolved": 0x3BA55C}
 CHANNELS = ("page", "ticket", "watchdog")
+# What the bot needs in each channel; the invite grants these server-wide, a private channel must grant them again.
+NEEDS = {"page": ("view_channel", "send_messages", "embed_links", "read_message_history",
+                  "create_public_threads", "send_messages_in_threads"),
+         "ticket": ("view_channel", "send_messages", "embed_links", "read_message_history"),
+         "watchdog": ("view_channel", "send_messages", "embed_links", "read_message_history")}
+
+
+def channel_problems(kind, mine, everyone):
+    """Why a channel cannot take this kind of message: permissions the bot lacks there, or a channel that
+    @everyone can see (pages name people and carry the responder's diagnosis). mine and everyone are the
+    channel's discord.Permissions for the bot and for @everyone."""
+    problems = []
+    missing = [p.replace("_", " ") for p in NEEDS[kind] if not getattr(mine, p)]
+    if missing:
+        problems.append("the bot lacks " + ", ".join(missing))
+    if everyone.view_channel:
+        problems.append("@everyone can see it; make it private and add the bot")
+    return problems
 
 
 def load_yaml(path):
@@ -350,13 +368,27 @@ def add_commands(bot):
     admin = app_commands.Group(name="pager", description="Pager setup and shift changes (server admins)",
                                default_permissions=discord.Permissions(administrator=True), guild_only=True)
 
-    @admin.command(name="setup", description="Pick the channels for pages, tickets and the alerting path")
+    @admin.command(name="setup", description="Pick three private channels: pages, tickets, the alerting path")
+    @app_commands.describe(pages="Private channel for pages (buttons and threads)", tickets="Private channel for tickets",
+                           watchdog="Private channel for the alerting path")
     async def setup(interaction: discord.Interaction, pages: discord.TextChannel, tickets: discord.TextChannel,
                     watchdog: discord.TextChannel):
-        for kind, ch in zip(CHANNELS, (pages, tickets, watchdog)):
+        chosen = list(zip(CHANNELS, (pages, tickets, watchdog)))
+        me, everyone = interaction.guild.me, interaction.guild.default_role
+        lines = []
+        if len({ch.id for _, ch in chosen}) < 3:
+            lines.append("Pick three different channels.")
+        for kind, ch in chosen:
+            for problem in channel_problems(kind, ch.permissions_for(me), ch.permissions_for(everyone)):
+                lines.append(f"{ch.mention} ({kind}s): {problem}.")
+        if lines:
+            log.warning("setup refused: %d problems", len(lines))
+            return await interaction.response.send_message("Nothing changed.\n" + "\n".join(lines), ephemeral=True)
+        for kind, ch in chosen:
             bot.store.setting(f"channel_{kind}", ch.id)
         await interaction.response.send_message(
             f"Pages go to {pages.mention}, tickets to {tickets.mention}, the alerting path to {watchdog.mention}.", ephemeral=True)
+        await bot.say("watchdog", "Pager set up: this channel gets the alerting path.")
         bot.kick()
 
     @admin.command(name="iam", description="Link your Discord account to a person in rotation.yml")

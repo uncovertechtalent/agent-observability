@@ -77,6 +77,20 @@ class BotTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((gone.message_id, gone.thread_id), (None, None))  # posted again on the next tick
         self.assertEqual(len([r for r in b.store.unposted() if r[1] == kept.id]), 0)
 
+    async def test_setup_refuses_public_channels_and_missing_permissions(self):
+        everyone_sees = discord.Permissions(view_channel=True)
+        private = discord.Permissions.none()
+        full = discord.Permissions(view_channel=True, send_messages=True, embed_links=True, read_message_history=True,
+                                   create_public_threads=True, send_messages_in_threads=True)
+        self.assertEqual(bot.channel_problems("page", full, private), [])
+        self.assertEqual(bot.channel_problems("page", full, everyone_sees), ["@everyone can see it; make it private and add the bot"])
+        no_threads = discord.Permissions(view_channel=True, send_messages=True, embed_links=True, read_message_history=True)
+        self.assertEqual(bot.channel_problems("ticket", no_threads, private), [])
+        self.assertEqual(bot.channel_problems("page", no_threads, private),
+                         ["the bot lacks create public threads, send messages in threads"])
+        self.assertEqual(bot.channel_problems("watchdog", private, private),
+                         ["the bot lacks view channel, send messages, embed links, read message history"])
+
     async def test_webhook_opens_and_resolves_and_metrics_count(self):
         b = make_bot()
         self.addCleanup(b.store.close)
