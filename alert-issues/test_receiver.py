@@ -7,7 +7,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
 import receiver
@@ -129,6 +129,27 @@ class ReceiverTest(unittest.TestCase):
         fresh = receiver.Receiver(self.gh, receiver.State(self.path), clock=lambda: NOW)
         self.assertEqual(fresh.handle({"alerts": [alert()]}), ["left #1 closed"])
         self.assertEqual(fresh.handle({"alerts": [alert(starts="2026-10-17T16:00:00Z")]}), ["reopened #1"])
+
+    def test_sweep_closes_an_issue_that_heard_nothing_for_a_day_and_firing_reopens_it(self):
+        self.rx.handle({"alerts": [alert()]})
+        self.rx.handle({"alerts": [alert(fp="fedcba9876543210", alertname="SearXNGDown")]})
+        self.rx.clock = lambda: NOW + timedelta(hours=24)
+        self.assertEqual(self.rx.sweep(), [])
+        self.rx.handle({"alerts": [alert(fp="fedcba9876543210", alertname="SearXNGDown")]})  # a repeat
+        self.rx.clock = lambda: NOW + timedelta(hours=26)
+        self.assertEqual(self.rx.sweep(), ["swept #1"])
+        self.assertEqual(self.gh.issues[1]["state"], "closed")
+        self.assertEqual(self.gh.issues[2]["state"], "open")
+        self.assertIn("No word from Alertmanager since 2026-10-17 14:00 UTC", self.gh.comments[-1][1])
+        self.assertEqual(self.rx.sweep(), [])
+        # The inhibition ends and the alert still fires, same episode: the swept issue reopens.
+        self.assertEqual(self.rx.handle({"alerts": [alert()]}), ["reopened #1"])
+
+    def test_sweep_leaves_closed_and_resolved_issues_alone(self):
+        self.rx.handle({"alerts": [alert()]})
+        self.rx.handle({"alerts": [alert("resolved", ends="2026-10-17T13:55:00Z")]})
+        self.rx.clock = lambda: NOW + timedelta(days=3)
+        self.assertEqual(self.rx.sweep(), [])
 
     def test_a_failed_comment_is_not_repeated_on_retry(self):
         self.rx.handle({"alerts": [alert()]})

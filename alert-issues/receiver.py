@@ -4,7 +4,9 @@ Alertmanager posts a group of alerts to /alerts; each alert carries a fingerprin
 its labels. The first firing notification for a fingerprint opens an issue. Later ones update
 it: a repeat refreshes the body, a new firing episode reopens a closed issue with a comment,
 and a resolved notification comments and closes it. An issue a person closed stays closed
-until the alert fires again in a new episode. The fingerprint-to-issue map lives in
+until the alert fires again in a new episode. An alert that resolves while inhibited or
+silenced sends no resolved notification, so an hourly sweep closes an issue that has heard
+nothing for 25 hours, and the next firing reopens it. The fingerprint-to-issue map lives in
 STATE_PATH; when it is lost, the receiver finds an issue again by the fingerprint in its body.
 
 The board repository is public, so an issue shows only the alert name, the summary
@@ -23,7 +25,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 log = logging.getLogger("alert-issues")
@@ -50,6 +52,9 @@ FINGERPRINT = re.compile(r"[0-9a-f]{8,64}")
 MAX_REQUEST = 1 << 20
 URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I)
 IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+# Longer than the board route's repeat_interval (24h) plus its group_interval, with margin.
+STALE_AFTER = timedelta(hours=25)
+SWEEP_EVERY = 3600
 STARTED = re.compile(r"Alert fingerprint: ([0-9a-f]+), firing since ([^\s<]+)")
 
 
@@ -224,25 +229,28 @@ class Receiver:
             if m and m[1] == fp:
                 record["starts_at"] = m[2]
 
+        def seen(number, is_open):
+            self.state.put(fp, {"issue": number, "starts_at": starts_at, "open": is_open, "last_seen": now.isoformat()})
+
         if status == "firing":
             if issue is None:
                 number = self.gh.create_issue(title(labels), body(alert, now), [KIND_LABEL, area_label(labels)])
-                self.state.put(fp, {"issue": number, "starts_at": starts_at})
+                seen(number, True)
                 return f"opened #{number}"
             number = issue["number"]
             new_episode = record.get("starts_at") != starts_at
             if issue["state"] == "closed":
-                if not new_episode:
+                if not new_episode and not record.get("swept"):
+                    seen(number, False)
                     return f"left #{number} closed"  # a person closed it during this episode
                 # State changes before comments: a retry after a failed comment loses the
                 # comment, never repeats it.
                 self.gh.update_issue(number, state="open", body=body(alert, now))
-                self.state.put(fp, {"issue": number, "starts_at": starts_at})
+                seen(number, True)
                 self.gh.comment(number, f"Firing again since {when(starts_at) or 'now'}.")
                 return f"reopened #{number}"
             self.gh.update_issue(number, body=body(alert, now))
-            if new_episode:
-                self.state.put(fp, {"issue": number, "starts_at": starts_at})
+            seen(number, True)
             return f"updated #{number}"
 
         if status == "resolved":
@@ -250,12 +258,36 @@ class Receiver:
                 return "resolved, no issue"
             number = issue["number"]
             if issue["state"] != "open":
+                seen(number, False)
                 return f"#{number} already closed"
             self.gh.update_issue(number, state="closed", state_reason="completed", body=body(alert, now))
+            seen(number, False)
             self.gh.comment(number, f"Resolved at {when(alert.get('endsAt')) or 'now'}.")
             return f"closed #{number}"
 
         raise ValueError(f"unknown status {status!r}")
+
+    def sweep(self, stale_after=STALE_AFTER):
+        """Close open issues that have heard nothing for longer than the board route's repeat
+        interval. An alert that resolves while inhibited or silenced never sends its resolved
+        notification; this closes its issue anyway, and the next firing reopens it."""
+        now, done = self.clock(), []
+        for fp, record in sorted(self.state.data.items()):
+            if not record.get("open") or not record.get("last_seen"):
+                continue
+            last = datetime.fromisoformat(record["last_seen"])
+            if now - last < stale_after:
+                continue
+            number = record["issue"]
+            issue = self.gh.get_issue(number)
+            self.state.put(fp, {**record, "open": False, "swept": bool(issue and issue["state"] == "open")})
+            if issue and issue["state"] == "open":
+                self.gh.update_issue(number, state="closed", state_reason="completed")
+                self.gh.comment(number, f"No word from Alertmanager since {last.strftime('%Y-%m-%d %H:%M UTC')}, "
+                                        "so the alert most likely resolved while inhibited or silenced. "
+                                        "This issue reopens if the alert fires again.")
+                done.append(f"swept #{number}")
+        return done
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -301,6 +333,18 @@ class Handler(BaseHTTPRequestHandler):
         pass  # the POST handler logs what it did; no access log
 
 
+def sweeper(receiver):
+    while True:
+        threading.Event().wait(SWEEP_EVERY)
+        try:
+            with Handler.lock:
+                done = receiver.sweep()
+            if done:
+                log.info("sweep: %s", ", ".join(done))
+        except Exception as e:  # GitHub down: the next sweep tries again
+            log.error("sweep failed: %s: %s", type(e).__name__, e)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     gh = GitHub()
@@ -309,6 +353,7 @@ def main():
     except RuntimeError as e:
         log.warning("%s: every notification will fail until it is there", e)
     Handler.receiver = Receiver(gh, State())
+    threading.Thread(target=sweeper, args=(Handler.receiver,), daemon=True).start()
     log.info("alert-issues on :%d for %s", PORT, REPO)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
