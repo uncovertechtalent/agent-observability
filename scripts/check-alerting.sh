@@ -87,9 +87,11 @@ docker run --rm -v "$PWD/alert-issues:/app:ro" -w /app -e PYTHONDONTWRITEBYTECOD
 
 echo "== pager unit tests (stdlib only) and the image's imports"
 docker run --rm -v "$PWD/pager:/app:ro" -w /app -e PYTHONDONTWRITEBYTECODE=1 "$PY_IMAGE" \
-  python -m unittest
+  python -m unittest test_core
 pager_image=$(docker build -q pager)
 docker run --rm --entrypoint python "$pager_image" -c "import bot, core, diagnose; print('pager image imports ok')"
+docker run --rm -v "$PWD/pager:/src:ro" -w /src -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python "$pager_image" \
+  -m unittest test_bot
 docker run --rm -v "$PWD/pager:/etc/pager:ro" --entrypoint python "$pager_image" -c \
   "import core, yaml; r = core.Rotation(yaml.safe_load(open('/etc/pager/rotation.yml'))); print('rotation.yml ok:', ', '.join(r.schedules))"
 

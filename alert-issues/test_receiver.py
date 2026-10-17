@@ -286,6 +286,15 @@ class PagerEventTest(unittest.TestCase):
         self.assertNotIn("@someone", b)
         self.assertNotIn("10.1.2.3", b)
 
+    def test_episodes_are_capped(self):
+        for day in range(25):
+            self.ep = f"2026-11-{day + 1:02d}T09:00:00Z"
+            self.event(fired=f"2026-11-{day + 1:02d}T09:00:30Z")
+        record = self.record()
+        self.assertEqual(len(record), receiver.PAGER_EPISODES)
+        self.assertEqual(record[0]["fired"], "2026-11-06T09:00:30Z")
+        self.assertEqual(len(self.rx.state.get(FP)["pages"]), receiver.PAGER_EPISODES)
+
     def test_issue_url_for_the_pager(self):
         self.assertEqual(self.rx.issue_url(FP), "https://github.com/o/board/issues/1")
         self.assertIsNone(self.rx.issue_url("bbbbbbbbbbbbbbbb"))

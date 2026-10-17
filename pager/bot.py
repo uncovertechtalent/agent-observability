@@ -83,7 +83,8 @@ class PagerBot(discord.Client):
         self.dirty, self.public_dirty = set(), set()
         self.tick_lock = asyncio.Lock()
         self.rotation_mtime, self.rotation_ok = 0, True
-        self.http = None
+        self.session = None  # aiohttp, for Prometheus and alert-issues; discord.Client owns self.http
+        self.issue_tries = {}
         add_commands(self)
 
     # ------------------------------------------------------------ lifecycle
@@ -138,6 +139,9 @@ class PagerBot(discord.Client):
         async with self.tick_lock:
             try:
                 self.reload_rotation()
+                for inc in self.pager.sweep():
+                    self.dirty.add(inc.id)
+                    self.public_dirty.add(inc.id)
                 if self.connected():
                     await self.post_missing()
                     for inc, actions in self.pager.due():
@@ -207,12 +211,17 @@ class PagerBot(discord.Client):
         for incident_id in list(self.dirty):
             inc = self.store.get(incident_id)
             ch = self.channel_for(inc.kind)
+            keep = False
             if inc.message_id and ch:
                 if inc.kind == "ticket" and not self.store.setting(f"issue:{inc.id}"):
                     await self.find_issue(inc)
+                    # alert-issues gets the same notification at the same time; look again for about 5 minutes
+                    tries = self.issue_tries[inc.id] = self.issue_tries.get(inc.id, 0) + 1
+                    keep = not self.store.setting(f"issue:{inc.id}") and inc.status != "resolved" and tries < 20
                 await ch.get_partial_message(inc.message_id).edit(
                     embed=self.embed(inc), view=self.view(inc) if inc.kind == "page" else None)
-            self.dirty.discard(incident_id)
+            if not keep:
+                self.dirty.discard(incident_id)
 
     # ------------------------------------------------------------ rendering
 
@@ -273,7 +282,7 @@ class PagerBot(discord.Client):
         base = PROMETHEUS.get(prometheus)
         if not base:
             raise LookupError(f"no Prometheus URL for {prometheus!r}")
-        async with self.http.get(f"{base}/api/v1/query", params={"query": promql},
+        async with self.session.get(f"{base}/api/v1/query", params={"query": promql},
                                  timeout=aiohttp.ClientTimeout(total=10)) as r:
             data = await r.json()
         if data.get("status") != "success":
@@ -282,7 +291,7 @@ class PagerBot(discord.Client):
 
     async def find_issue(self, inc):
         try:
-            async with self.http.get(f"{ALERT_ISSUES}/issues/{inc.fingerprint}", timeout=aiohttp.ClientTimeout(total=5)) as r:
+            async with self.session.get(f"{ALERT_ISSUES}/issues/{inc.fingerprint}", timeout=aiohttp.ClientTimeout(total=5)) as r:
                 if r.status == 200:
                     self.store.setting(f"issue:{inc.id}", (await r.json())["url"])
         except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError) as e:
@@ -298,7 +307,7 @@ class PagerBot(discord.Client):
             body = {"fingerprint": inc.fingerprint, "starts_at": inc.starts_at,
                     "pager": public_view(inc, self.pager.rotation)}
             try:
-                async with self.http.post(f"{ALERT_ISSUES}/events", json=body, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                async with self.session.post(f"{ALERT_ISSUES}/events", json=body, timeout=aiohttp.ClientTimeout(total=30)) as r:
                     if r.status == 200 or (r.status == 404 and inc.status == "resolved"):
                         self.public_dirty.discard(incident_id)
                     elif r.status != 404:  # 404 while open: the issue does not exist yet; try again next tick
@@ -412,11 +421,20 @@ def web_app(bot):
                   f"pager_incidents_unacknowledged {sum(i.status == 'triggered' for i in bot.store.open_incidents('page'))}"]
         return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
 
+    async def pages(request):
+        return await alerts(request, "page")
+
+    async def tickets(request):
+        return await alerts(request, "ticket")
+
+    async def healthz(request):
+        return web.Response(text="ok\n")
+
     app = web.Application(client_max_size=1 << 20)
-    app.router.add_post("/alerts/page", lambda r: alerts(r, "page"))
-    app.router.add_post("/alerts/ticket", lambda r: alerts(r, "ticket"))
+    app.router.add_post("/alerts/page", pages)
+    app.router.add_post("/alerts/ticket", tickets)
     app.router.add_get("/metrics", metrics)
-    app.router.add_get("/healthz", lambda r: web.Response(text="ok\n"))
+    app.router.add_get("/healthz", healthz)
     return app
 
 
@@ -424,7 +442,7 @@ async def run():
     pager = Pager(Store(STATE_DB), Rotation(load_yaml(ROTATION_FILE)))
     bot = PagerBot(pager, load_yaml(RUNBOOKS_FILE) or [])
     bot.rotation_mtime = os.stat(ROTATION_FILE).st_mtime
-    bot.http = aiohttp.ClientSession()
+    bot.session = aiohttp.ClientSession()
     bot.public_dirty.update(i.id for i in pager.store.recent(50) if i.kind == "page")  # idempotent on the issue side
     runner = web.AppRunner(web_app(bot), access_log=None)  # every scrape would log a line
     await runner.setup()
@@ -436,10 +454,13 @@ async def run():
             token = f.read().strip()
     except OSError:
         token = ""
-    if not token:
-        log.warning("no Discord token in %s: incidents are stored and posted once the bot connects", TOKEN_FILE)
-        await asyncio.Event().wait()
-    await bot.start(token)
+    try:
+        if not token:
+            log.warning("no Discord token in %s: incidents are stored and posted once the bot connects", TOKEN_FILE)
+            await asyncio.Event().wait()
+        await bot.start(token)
+    finally:
+        await bot.session.close()
 
 
 def main():

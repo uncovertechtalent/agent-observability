@@ -16,6 +16,9 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+# No firing notification for this long means the alert resolved unseen: the page route repeats every
+# hour and the board route every 24 hours (alertmanager.yml), with margin.
+STALE_AFTER = {"page": timedelta(hours=2, minutes=30), "ticket": timedelta(hours=25)}
 KINDS = {"human", "agent"}
 
 
@@ -236,6 +239,7 @@ class Incident:
     notified: dict = field(default_factory=dict)
     message_id: int = None
     thread_id: int = None
+    last_seen: datetime = None  # the last firing notification from Alertmanager
 
 
 SCHEMA = """
@@ -243,7 +247,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY, kind TEXT, fingerprint TEXT, starts_at TEXT, alertname TEXT, severity TEXT,
   prometheus TEXT, summary TEXT, labels TEXT, generator_url TEXT, status TEXT, created_at TEXT,
   acked_at TEXT, acked_by TEXT, resolved_at TEXT, resolved_by TEXT, forced_level INTEGER DEFAULT -1,
-  agent_done INTEGER DEFAULT 0, notified TEXT DEFAULT '{}', message_id INTEGER, thread_id INTEGER);
+  agent_done INTEGER DEFAULT 0, notified TEXT DEFAULT '{}', message_id INTEGER, thread_id INTEGER, last_seen TEXT);
 CREATE INDEX IF NOT EXISTS incidents_fp ON incidents (fingerprint, kind);
 CREATE TABLE IF NOT EXISTS events (incident_id INTEGER, at TEXT, kind TEXT, actor TEXT, detail TEXT, posted INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
@@ -252,13 +256,15 @@ CREATE TABLE IF NOT EXISTS overrides (id INTEGER PRIMARY KEY, person TEXT, sched
 """
 COLUMNS = ["id", "kind", "fingerprint", "starts_at", "alertname", "severity", "prometheus", "summary", "labels",
            "generator_url", "status", "created_at", "acked_at", "acked_by", "resolved_at", "resolved_by",
-           "forced_level", "agent_done", "notified", "message_id", "thread_id"]
+           "forced_level", "agent_done", "notified", "message_id", "thread_id", "last_seen"]
 
 
 class Store:
     def __init__(self, path):
         self.db = sqlite3.connect(path, isolation_level=None)
         self.db.executescript(SCHEMA)
+        if "last_seen" not in {r[1] for r in self.db.execute("PRAGMA table_info(incidents)")}:
+            self.db.execute("ALTER TABLE incidents ADD COLUMN last_seen TEXT")  # databases from before the sweep
 
     def close(self):
         self.db.close()
@@ -268,7 +274,7 @@ class Store:
         if not row:
             return None
         d = dict(zip(COLUMNS, row))
-        for k in ("created_at", "acked_at", "resolved_at"):
+        for k in ("created_at", "acked_at", "resolved_at", "last_seen"):
             d[k] = parse_iso(d[k])
         d["labels"], d["notified"] = json.loads(d["labels"] or "{}"), json.loads(d["notified"] or "{}")
         d["agent_done"] = bool(d["agent_done"])
@@ -294,20 +300,20 @@ class Store:
     def save(self, inc):
         self.db.execute(
             "UPDATE incidents SET summary=?, labels=?, status=?, acked_at=?, acked_by=?, resolved_at=?, resolved_by=?, "
-            "forced_level=?, agent_done=?, notified=?, message_id=?, thread_id=? WHERE id=?",
+            "forced_level=?, agent_done=?, notified=?, message_id=?, thread_id=?, last_seen=? WHERE id=?",
             (inc.summary, json.dumps(inc.labels), inc.status, iso(inc.acked_at), inc.acked_by, iso(inc.resolved_at),
              inc.resolved_by, inc.forced_level, int(inc.agent_done), json.dumps(inc.notified), inc.message_id,
-             inc.thread_id, inc.id))
+             inc.thread_id, iso(inc.last_seen), inc.id))
 
     def create(self, kind, alert, now):
         labels = alert.get("labels") or {}
         cur = self.db.execute(
             "INSERT INTO incidents (kind, fingerprint, starts_at, alertname, severity, prometheus, summary, labels, "
-            "generator_url, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "generator_url, status, created_at, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (kind, alert["fingerprint"], alert.get("startsAt", ""), labels.get("alertname", "unnamed"),
              labels.get("severity", ""), labels.get("prometheus", ""),
              (alert.get("annotations") or {}).get("summary", ""), json.dumps(labels), alert.get("generatorURL", ""),
-             "triggered", iso(now)))
+             "triggered", iso(now), iso(now)))
         return self.get(cur.lastrowid)
 
     # timeline
@@ -377,9 +383,10 @@ class Pager:
         if status == "firing":
             if inc and inc.status != "resolved":
                 inc.summary = (alert.get("annotations") or {}).get("summary", inc.summary)
+                inc.last_seen = now
                 self.store.save(inc)
                 return inc, "updated"
-            if inc and inc.starts_at == alert.get("startsAt") and inc.resolved_by != "Alertmanager":
+            if inc and inc.starts_at == alert.get("startsAt") and not inc.resolved_by.startswith("Alertmanager"):
                 return inc, "ignored"  # a person resolved this firing episode; the next one pages again
             inc = self.store.create(kind, alert, now)
             self.store.event(inc, now, "triggered", "Alertmanager", inc.summary)
@@ -423,6 +430,18 @@ class Pager:
         self.store.save(inc)
         self.store.event(inc, now, "escalated", self.rotation.name(person), f"to level {current + 2}")
         return True
+
+    def sweep(self):
+        """Resolve open incidents Alertmanager stopped talking about. A firing alert repeats (pages every
+        hour, tickets every 24 hours); an alert that resolves while inhibited or silenced sends no
+        resolve, and its incident would stay open and keep paging."""
+        now, done = self.clock(), []
+        for kind, after in STALE_AFTER.items():
+            for inc in self.store.open_incidents(kind):
+                if inc.last_seen and now - inc.last_seen > after:
+                    self.resolve(inc, "Alertmanager (stale)")
+                    done.append(inc)
+        return done
 
     def due(self):
         """(incident, actions) for every open page that needs something done now."""

@@ -1,7 +1,8 @@
 # Who is on call, and what happens when nobody acknowledges a page (#36).
 #
-# Read by the pager on the home server and by the public on-call page. Public: names only.
-# A Discord account is linked to a person on the pager's server with /pager iam; no ID lives here.
+# Read by the pager on the home server and by the public on-call page on machinebehavior.io, which
+# parses it with a strict reader: block style only, no flow mappings. Public: names only. A Discord
+# account is linked to a person on the pager's server with /pager iam; no ID lives here.
 #
 # Model as in PagerDuty: a schedule has layers, a later layer wins over an earlier one, and an
 # override wins over every layer. The escalation policy walks its rules in order of delay.
@@ -9,8 +10,12 @@
 timezone: Europe/Berlin
 
 people:
-  stefan: {name: Stefan Coetzee, kind: human}
-  responder: {name: Responder agent, kind: agent}
+  stefan:
+    name: Stefan Coetzee
+    kind: human
+  responder:
+    name: Responder agent
+    kind: agent
 
 schedules:
   primary:
@@ -18,14 +23,15 @@ schedules:
     layers:
       - name: Waking hours
         members: [stefan]
-        start: "2026-10-19T08:00"   # handoff time; with one member, the same person every turn
+        start: "2026-10-19T08:00"
         turn: 7d
         restrictions:
-          - {days: [mon, tue, wed, thu, fri, sat, sun], from: "08:00", to: "22:00"}
-
+          - days: [mon, tue, wed, thu, fri, sat, sun]
+            from: "08:00"
+            to: "22:00"
   responder:
-    description: >-
-      The agent responder: posts the alert's runbook link and a read-only diagnosis from
+    description: >
+      The agent responder posts the alert's runbook link and a read-only diagnosis from
       Prometheus into the incident thread. It changes nothing and never acknowledges.
     layers:
       - name: Always
@@ -34,8 +40,10 @@ schedules:
 escalation_policy:
   name: House default
   rules:
-    - {after: 0m, schedule: primary}
-    - {after: 15m, schedule: responder}
+    - after: 0m
+      schedule: primary
+    - after: 15m
+      schedule: responder
   # Until somebody acknowledges, the person on call is mentioned again every 5 minutes, 3 times.
   renotify_after: 5m
   renotify_limit: 3
@@ -43,5 +51,8 @@ escalation_policy:
   # the primary comes on call at 08:00, a page that is still open and unacknowledged notifies them.
 
 # Shift swaps by file edit; /pager override adds them at runtime. Times are in the timezone above.
+# Example item:
+#   - person: stefan
+#     start: "2026-10-24T22:00"
+#     end: "2026-10-25T02:00"
 overrides: []
-#  - {person: stefan, start: "2026-10-24T22:00", end: "2026-10-25T02:00"}

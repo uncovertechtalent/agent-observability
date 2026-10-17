@@ -180,6 +180,7 @@ PAGER_FIELDS = {"alert": str, "severity": str, "prometheus": str, "fired": str, 
                 "acknowledged_by": str, "resolved": str, "resolved_by": str, "responder_ran": bool,
                 "time_to_acknowledge_s": int, "time_to_resolve_s": int}
 PAGER_START, PAGER_END = "<!-- pager:start -->", "<!-- pager:end -->"
+PAGER_EPISODES = 20  # kept per issue, so a flapping page cannot grow the body past GitHub's limit
 
 
 def span(seconds):
@@ -351,6 +352,7 @@ class Receiver:
         if issue is None:
             raise LookupError(f"issue #{number} is gone")
         pages[episode] = view
+        pages = dict(sorted(pages.items(), key=lambda kv: kv[1]["fired"])[-PAGER_EPISODES:])
         self.state.put(fp, {**record, "pages": pages})
         self.gh.update_issue(number, body=with_pager_block(issue.get("body") or "", pages))
         if view["acknowledged"] and not old.get("acknowledged"):
@@ -358,7 +360,7 @@ class Receiver:
                                     f"{span(view['time_to_acknowledge_s'])} after it fired.")
         if view["responder_ran"] and not old.get("responder_ran"):
             self.gh.comment(number, "The responder agent posted its runbook link and read-only diagnosis in the pager.")
-        if view["resolved"] and not old.get("resolved") and view["resolved_by"] != "Alertmanager":
+        if view["resolved"] and not old.get("resolved") and not (view["resolved_by"] or "").startswith("Alertmanager"):
             self.gh.comment(number, f"Resolved in the pager by {view['resolved_by']}.")
         return f"#{number} pager record updated"
 

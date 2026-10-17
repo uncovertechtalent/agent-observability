@@ -177,6 +177,24 @@ class IncidentTest(unittest.TestCase):
         self.assertEqual(self.pager.on_alert(page(), "page")[1], "ignored")
         self.assertEqual(self.pager.on_alert(page(starts="2026-10-17T13:00:00Z"), "page")[1], "opened")
 
+    def test_sweep_resolves_what_alertmanager_stopped_repeating(self):
+        page_inc, _ = self.pager.on_alert(page(), "page")
+        t = dict(page(fp="aaaaaaaaaaaaaaaa", name="SearXNGSlowSearches"))
+        t["labels"] = dict(t["labels"], severity="ticket")
+        self.pager.on_alert(t, "ticket")
+        self.clock.advance(hours=2)
+        self.assertEqual(self.pager.sweep(), [])
+        self.pager.on_alert(page(), "page")  # an hourly repeat keeps the page open
+        self.clock.advance(hours=2)
+        self.assertEqual(self.pager.sweep(), [])
+        self.clock.advance(hours=1)
+        swept = self.pager.sweep()
+        self.assertEqual([i.kind for i in swept], ["page"])
+        self.assertEqual(self.pager.store.get(page_inc.id).resolved_by, "Alertmanager (stale)")
+        self.clock.advance(hours=21)
+        self.assertEqual([i.kind for i in self.pager.sweep()], ["ticket"])
+        self.assertEqual(self.pager.on_alert(page(), "page")[1], "opened")  # a stale resolve does not mute the episode
+
     def test_tickets_are_tracked_apart_from_pages(self):
         t = dict(page(fp="aaaaaaaaaaaaaaaa", name="SearXNGSlowSearches"))
         t["labels"] = dict(t["labels"], severity="ticket")
