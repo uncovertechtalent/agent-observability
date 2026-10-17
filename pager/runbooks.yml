@@ -1,0 +1,8 @@
+# Where the responder sends you for an alert: the first pattern that matches the whole alert name
+# wins. The service pages link the service's dashboard, docs and runbooks.
+- {match: "LocalLLM.*|Ollama.*|ModelSpilledToCPU", url: "https://machinebehavior.io/inside/services/local-llm/"}
+- {match: "SearXNG.*", url: "https://machinebehavior.io/inside/services/searxng/"}
+- {match: "AgentTool.*", url: "https://machinebehavior.io/inside/services/agent-sessions/"}
+- {match: "ClaudeCodeSpend.*|AWSCost.*", url: "https://machinebehavior.io/inside/docs/fin/budgets-and-alerts/"}
+- {match: "Alertmanager.*|Pager.*|Watchdog", url: "https://machinebehavior.io/inside/docs/obs/on-call/"}
+- {match: ".*", url: "https://machinebehavior.io/inside/docs/obs/on-call/"}

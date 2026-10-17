@@ -11,8 +11,34 @@ groups:
         annotations:
           summary: Always fires. Its pings to the outside heartbeat check stopping means the alerting path is down.
 
-      # Notifications Alertmanager gave up on after its retries. A failing Discord or heartbeat
-      # webhook reaches the board this way; a failing board receiver shows here and in its logs.
+      # The pager service. Both go to #watchdog by webhook, past the pager (alertmanager.yml).
+      - alert: PagerDown
+        expr: up{job="pager"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: Prometheus cannot scrape the pager; pages reach neither Discord buttons nor escalation.
+      - alert: PagerFailing
+        expr: increase(pager_tick_errors_total[15m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: The pager failed Discord calls for at least one incident in the last 15 minutes; see its log.
+      - alert: PagerDisconnected
+        expr: pager_discord_connected == 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: The pager runs but is not connected to Discord or has no channels set; pages wait in its database.
+
+      # The GitHub token behind the board issues expires on a date; a ticket two weeks before, while it still works.
+      - alert: AlertIssuesTokenExpiring
+        expr: alert_issues_github_token_expiry_timestamp_seconds - time() < 14 * 86400
+        labels: {severity: ticket}
+        annotations:
+          summary: The GitHub token of alert-issues expires within 14 days; create a new one and replace the token file.
+
+      # Notifications Alertmanager gave up on after its retries. A failing pager, Discord or
+      # heartbeat webhook reaches #watchdog and the board this way.
       - alert: AlertmanagerNotificationsFailing
         expr: sum by (integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
         labels: {severity: ticket}
