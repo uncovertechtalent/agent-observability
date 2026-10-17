@@ -38,7 +38,8 @@ flowchart LR
   PG -- read-only queries --> P
   AM -- page and ticket --> AI[alert-issues] -- one issue per alert --> GHI[(board issues)]
   PG -- redacted page record --> AI
-  AM -- Watchdog every 5 min --> HB[outside heartbeat check]
+  AM -- Watchdog --> PG
+  PG -- empty ping every 5 min --> HB[outside heartbeat check]
 ```
 
 ## Run it
@@ -65,15 +66,16 @@ docker compose up -d --build
 Alert delivery needs secrets, each a file with mode 600, owned by the user in `ALERTMANAGER_UID` (default 1000). Without the four delivery secrets the stack runs and the notifications fail, visibly, in the two services' logs; without `web.yml` Alertmanager does not start.
 
 ```bash
-mkdir -p -m 700 alertmanager/secrets alertmanager/data alert-issues/secrets
+mkdir -p -m 700 alertmanager/secrets alertmanager/data alert-issues/secrets pager/secrets
 umask 077
 read -rs v && printf %s "$v" > alertmanager/secrets/discord_webhook_url                # the channel's webhook
-read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_agent_observability  # ping URL, check 1
-read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_nas                  # ping URL, check 2
+read -rs v && printf %s "$v" > pager/secrets/heartbeat_url_agent_observability         # ping URL, check 1
+read -rs v && printf %s "$v" > pager/secrets/heartbeat_url_nas                         # ping URL, check 2
 read -rs v && printf %s "$v" > alert-issues/secrets/github_token                       # Issues read and write, one repo
-mkdir -p -m 700 pager/secrets
 read -rs v && printf %s "$v" > pager/secrets/discord_bot_token                          # the pager bot's token
 ```
+
+Upgrading a stack from before the heartbeat relay: move the ping URLs first, so no heartbeat is lost: `mv alertmanager/secrets/heartbeat_url_* pager/secrets/`, then `docker compose up -d --build`.
 
 The pager's Discord bot needs no privileged intent. Invite it with the scopes `bot` and `applications.commands` and the permissions View Channels, Send Messages, Embed Links, Read Message History, Create Public Threads and Send Messages in Threads (integer 309237730304), and nothing more. On the server, a server admin runs `/pager setup` (the channels for pages, tickets and the alerting path) and `/pager iam` (links their account to a person in `pager/rotation.yml`), so no Discord ID is ever written down.
 
@@ -172,7 +174,7 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
 
 It never carries a Discord ID, a channel, a label value, the summary or a URL.
 
-**Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. The pager cannot report its own outage, so `PagerDown`, `PagerDisconnected` and `AlertmanagerNotificationsFailing` go past it: to the alerting-path channel by webhook and to the board. The outside heartbeat check alarms into the same channel, from outside. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), the unit tests of the receiver and the pager, and the pager image's imports.
+**Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager sends each Watchdog to the pager, which pings that Prometheus's outside heartbeat check every 5 minutes with an empty request, so Alertmanager's JSON (its address, generator URLs, labels) never leaves the house. The check alarms when the pings stop: a dead Prometheus, Alertmanager, pager, box or uplink all stop them. The pager cannot report its own outage, so `PagerDown`, `PagerDisconnected` and `AlertmanagerNotificationsFailing` go past it: to the alerting-path channel by webhook and to the board. The outside heartbeat check alarms into the same channel, from outside. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), the unit tests of the receiver and the pager, and the pager image's imports.
 
 **Span metrics.** Tempo's metrics generator writes RED metrics per span name back to Prometheus, so trace-derived latency can be graphed and alerted on next to everything else.
 

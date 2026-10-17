@@ -10,15 +10,15 @@
 #
 # The alerting path watches itself apart from the pager: a down or disconnected pager and a
 # failed delivery go to #watchdog by webhook and to the board, never through the pager. Watchdog
-# always fires; each Prometheus's Watchdog pings its own outside heartbeat check every 5 minutes,
-# and the check alarms when the pings stop.
+# always fires; each Prometheus's Watchdog goes through the pager, which pings that Prometheus's
+# outside heartbeat check every 5 minutes with an empty request, so Alertmanager's JSON stays in
+# the house. The check alarms when the pings stop: a down pager stops them too.
 #
 # Secrets are files in ./secrets (mode 600, git-ignored, never in this file):
 #   web.yml                             basic auth on every endpoint, one bcrypt user per
 #                                       Prometheus (agent-observability, nas)
 #   discord_webhook_url                 the #watchdog channel's webhook
-#   heartbeat_url_agent_observability   ping URL of the heartbeat check for this Prometheus
-#   heartbeat_url_nas                   ping URL of the heartbeat check for the NAS Prometheus
+# The heartbeat ping URLs are the pager's (pager/secrets/heartbeat_url_<name>).
 #
 # Tests: scripts/check-alerting.sh (amtool routes for every rule's severity).
 
@@ -109,12 +109,12 @@ receivers:
 
   - name: heartbeat-agent-observability
     webhook_configs:
-      - url_file: /etc/alertmanager/secrets/heartbeat_url_agent_observability
+      - url: http://pager:9096/heartbeat/agent-observability
         send_resolved: false
 
   - name: heartbeat-nas
     webhook_configs:
-      - url_file: /etc/alertmanager/secrets/heartbeat_url_nas
+      - url: http://pager:9096/heartbeat/nas
         send_resolved: false
 
   - name: blackhole

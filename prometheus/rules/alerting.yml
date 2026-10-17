@@ -1,6 +1,7 @@
-# The alerting path itself. Watchdog always fires; Alertmanager sends it to an outside heartbeat
-# check every 5 minutes, and the check alarms when the pings stop. A dead Prometheus, a dead
-# Alertmanager, a dead box and a dead uplink all stop them, and none of those can report itself.
+# The alerting path itself. Watchdog always fires; Alertmanager sends it to the pager, which pings an
+# outside heartbeat check every 5 minutes with an empty request, and the check alarms when the pings
+# stop. A dead Prometheus, Alertmanager, pager, box or uplink all stop them, and none of those can
+# report itself.
 # Severity "none" keeps it off every route to a person. The NAS Prometheus carries the same rule.
 groups:
   - name: alerting

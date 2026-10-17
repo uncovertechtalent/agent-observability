@@ -139,8 +139,8 @@ services:
     restart: unless-stopped
 
   # Routes the alerts of this stack's Prometheus and of the NAS monitoring Prometheus by
-  # severity: page to Discord in waking hours, page and ticket to a GitHub issue, info nowhere,
-  # Watchdog to the outside heartbeat checks. Every endpoint needs basic auth (secrets/web.yml),
+  # severity: page to the pager, page and ticket to a GitHub issue, info nowhere, Watchdog
+  # through the pager to the outside heartbeat checks. Every endpoint needs basic auth (secrets/web.yml),
   # since a posted alert can end up as a public issue. Secrets are files in
   # ./alertmanager/secrets (mode 600, git-ignored), so the container runs as the host user that
   # owns them; state (silences, the notification log) goes to ./alertmanager/data.
@@ -180,8 +180,9 @@ services:
   # PagerDuty-style pager on a private Discord server: an incident per page with Acknowledge,
   # Resolve and Escalate buttons and a thread for its timeline, the rotation and escalation policy
   # in pager/rotation.yml, and a responder agent that posts a read-only diagnosis. Compose network
-  # only: Alertmanager posts to it, and the bot connects out to Discord. The bot token is a file in
-  # ./pager/secrets (mode 600). PAGER_EXTRA_PROMETHEUS adds ",name=url" pairs for the responder.
+  # only: Alertmanager posts to it; it connects out to Discord, and sends an empty GET to the outside
+  # heartbeat checks for each Watchdog. ./pager/secrets (mode 600) holds the bot token and
+  # heartbeat_url_<name>. PAGER_EXTRA_PROMETHEUS adds ",name=url" pairs for the responder.
   pager:
     build:
       context: ./pager
