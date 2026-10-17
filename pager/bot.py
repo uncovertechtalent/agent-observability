@@ -85,6 +85,7 @@ class PagerBot(discord.Client):
         self.rotation_mtime, self.rotation_ok = 0, True
         self.session = None  # aiohttp, for Prometheus and alert-issues; discord.Client owns self.http
         self.issue_tries = {}
+        self.errors = 0  # failed Discord calls; PagerFailing alerts on its increase
         add_commands(self)
 
     # ------------------------------------------------------------ lifecycle
@@ -146,7 +147,8 @@ class PagerBot(discord.Client):
                     await self.post_missing()
                     for inc, actions in self.pager.due():
                         for action in actions:
-                            await self.perform(inc, action)
+                            if not await self.guard(inc, self.perform(inc, action), "action"):
+                                break  # recorded only once done, so the next tick tries again
                             self.pager.record(inc, action)
                             self.dirty.add(inc.id)
                             self.public_dirty.add(inc.id)
@@ -156,11 +158,28 @@ class PagerBot(discord.Client):
             except Exception:
                 log.exception("tick failed")
 
+    async def guard(self, inc, coro, what):
+        """Run one Discord call for one incident; a failure stays with that incident. A message or thread
+        someone deleted is forgotten, so the incident is posted again on the next tick."""
+        try:
+            await coro
+            return True
+        except discord.NotFound:
+            self.errors += 1
+            log.warning("#%d: message or thread is gone (%s); posting it again", inc.id, what)
+            inc = self.store.get(inc.id)
+            inc.message_id = inc.thread_id = None
+            self.store.save(inc)
+        except Exception as e:  # Forbidden, a Discord outage, a bug: counted, logged, next incident
+            self.errors += 1
+            log.warning("#%d: %s failed: %s: %s", inc.id, what, type(e).__name__, e)
+        return False
+
     async def post_missing(self):
         for kind in ("page", "ticket"):
             for inc in self.store.open_incidents(kind):
                 if not inc.message_id:
-                    await self.post_incident(inc)
+                    await self.guard(inc, self.post_incident(inc), "post")
 
     async def post_incident(self, inc):
         ch = self.channel_for(inc.kind)
@@ -204,7 +223,11 @@ class PagerBot(discord.Client):
                 line = f"{stamp} {who}: {inc.alertname} needs an acknowledgement ({detail})."
             else:
                 line = f"{stamp} **{kind}** by {actor}" + (f": {detail}" if detail else "")
-            if await self.thread_send(inc, line):
+            sent = []
+
+            async def send():
+                sent.append(await self.thread_send(inc, line))
+            if await self.guard(inc, send(), "timeline") and sent[0]:
                 self.store.mark_posted(rowid)
 
     async def refresh(self):
@@ -218,8 +241,8 @@ class PagerBot(discord.Client):
                     # alert-issues gets the same notification at the same time; look again for about 5 minutes
                     tries = self.issue_tries[inc.id] = self.issue_tries.get(inc.id, 0) + 1
                     keep = not self.store.setting(f"issue:{inc.id}") and inc.status != "resolved" and tries < 20
-                await ch.get_partial_message(inc.message_id).edit(
-                    embed=self.embed(inc), view=self.view(inc) if inc.kind == "page" else None)
+                await self.guard(inc, ch.get_partial_message(inc.message_id).edit(
+                    embed=self.embed(inc), view=self.view(inc) if inc.kind == "page" else None), "update")
             if not keep:
                 self.dirty.discard(incident_id)
 
@@ -416,6 +439,9 @@ def web_app(bot):
         ]
         for kind in ("page", "ticket"):
             lines.append(f'pager_incidents_open{{kind="{kind}"}} {len(bot.store.open_incidents(kind))}')
+        lines += ["# HELP pager_tick_errors_total Discord calls that failed for one incident (post, update, timeline, action).",
+                  "# TYPE pager_tick_errors_total counter",
+                  f"pager_tick_errors_total {bot.errors}"]
         lines += ["# HELP pager_incidents_unacknowledged Open pages nobody acknowledged.",
                   "# TYPE pager_incidents_unacknowledged gauge",
                   f"pager_incidents_unacknowledged {sum(i.status == 'triggered' for i in bot.store.open_incidents('page'))}"]

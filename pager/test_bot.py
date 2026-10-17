@@ -51,6 +51,32 @@ class BotTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c.item.disabled for c in b.view(inc).children], [True, False, False])
         self.assertEqual([c.item.custom_id for c in b.view(inc).children], ["pager:ack:1", "pager:resolve:1", "pager:escalate:1"])
 
+    async def test_a_deleted_thread_stays_with_its_incident(self):
+        b = make_bot()
+        self.addCleanup(b.store.close)
+        lost, _ = b.pager.on_alert(alert(), "page")
+        other = dict(alert(), fingerprint="fedcba9876543210")
+        other["labels"] = dict(other["labels"], alertname="SearXNGDown")
+        kept, _ = b.pager.on_alert(other, "page")
+        for inc, ids in ((lost, (11, 12)), (kept, (21, 22))):
+            inc = b.store.get(inc.id)
+            inc.message_id, inc.thread_id = ids
+            b.store.save(inc)
+        posted = []
+
+        async def thread_send(inc, text):
+            if inc.id == lost.id:
+                raise discord.NotFound(type("R", (), {"status": 404, "reason": "Not Found"})(), "Unknown Channel")
+            posted.append(inc.id)
+            return True
+        b.thread_send = thread_send
+        await b.post_events()
+        self.assertEqual(posted, [kept.id])
+        self.assertEqual(b.errors, 1)
+        gone = b.store.get(lost.id)
+        self.assertEqual((gone.message_id, gone.thread_id), (None, None))  # posted again on the next tick
+        self.assertEqual(len([r for r in b.store.unposted() if r[1] == kept.id]), 0)
+
     async def test_webhook_opens_and_resolves_and_metrics_count(self):
         b = make_bot()
         self.addCleanup(b.store.close)

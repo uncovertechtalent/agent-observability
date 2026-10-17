@@ -43,6 +43,7 @@ route pager,board alertname=OllamaDown severity=page prometheus=agent-observabil
 route pager,board alertname=UCGMaxSomethingNew severity=page prometheus=nas
 route alerting-path alertname=PagerDown severity=page prometheus=agent-observability
 route alerting-path alertname=PagerDisconnected severity=page prometheus=agent-observability
+route alerting-path alertname=PagerFailing severity=page prometheus=agent-observability
 route alerting-path alertname=AlertmanagerNotificationsFailing severity=ticket prometheus=agent-observability
 route board alertname=SearXNGSlowSearches severity=ticket prometheus=agent-observability
 route board alertname=UCGMaxPollerScrapeFailing severity=ticket prometheus=nas
@@ -71,7 +72,7 @@ while read -r name sev; do
   case "$name:$sev" in
     Watchdog:none) want=heartbeat-agent-observability; extra=prometheus=agent-observability ;;
     AWSCostForecastOverBudget:*|AWSCostMonthToDateOver80:*|AWSCostDailySpike:*) want=blackhole; extra= ;;
-    PagerDown:*|PagerDisconnected:*|AlertmanagerNotificationsFailing:*) want=alerting-path; extra= ;;
+    PagerDown:*|PagerDisconnected:*|PagerFailing:*|AlertmanagerNotificationsFailing:*) want=alerting-path; extra= ;;
     *:page)        want=pager,board; extra= ;;
     *:ticket)      want=board; extra= ;;
     *:info)        want=blackhole; extra= ;;

@@ -18,6 +18,11 @@ groups:
         labels: {severity: page}
         annotations:
           summary: Prometheus cannot scrape the pager; pages reach neither Discord buttons nor escalation.
+      - alert: PagerFailing
+        expr: increase(pager_tick_errors_total[15m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: The pager failed Discord calls for at least one incident in the last 15 minutes; see its log.
       - alert: PagerDisconnected
         expr: pager_discord_connected == 0
         for: 5m

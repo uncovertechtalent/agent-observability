@@ -48,6 +48,25 @@ tests:
         alertname: PagerDisconnected
         exp_alerts: []
 
+  # One failed Discord call for an incident: a page for 15 minutes, then quiet.
+  - interval: 1m
+    input_series:
+      - series: 'pager_tick_errors_total{job="pager", instance="pager:9096"}'
+        values: '0x5 1x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PagerFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: PagerFailing
+        exp_alerts:
+          - exp_labels: {severity: page, job: pager, instance: "pager:9096"}
+            exp_annotations:
+              summary: The pager failed Discord calls for at least one incident in the last 15 minutes; see its log.
+      - eval_time: 25m
+        alertname: PagerFailing
+        exp_alerts: []
+
   # One Discord notification fails after its retries: a ticket, per integration; the webhook
   # counter stays flat and stays quiet.
   - interval: 1m
