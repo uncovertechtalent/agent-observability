@@ -7,9 +7,13 @@ global:
     prometheus: agent-observability
 
 # Severity routes in alertmanager/alertmanager.yml: page to Discord, ticket to a GitHub issue.
+# Alertmanager wants basic auth; the password file is readable by the container user only.
 alerting:
   alertmanagers:
-    - static_configs:
+    - basic_auth:
+        username: agent-observability
+        password_file: /etc/prometheus/secrets/alertmanager_password
+      static_configs:
         - targets: ["alertmanager:9093"]
 
 rule_files:
@@ -51,6 +55,9 @@ scrape_configs:
       - targets: ["tempo:3200"]
 
   - job_name: alertmanager
+    basic_auth:
+      username: agent-observability
+      password_file: /etc/prometheus/secrets/alertmanager_password
     static_configs:
       - targets: ["alertmanager:9093"]
 

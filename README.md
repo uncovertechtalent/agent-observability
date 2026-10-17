@@ -56,10 +56,10 @@ docker compose up -d --build
 | ollama-exporter | 11435 | Metering proxy in front of Ollama |
 | deploy-exporter | 9201 | Website deploy runs to Loki, latest state as metrics |
 | aws-cost-exporter | 9202 (compose network only) | AWS spend and budget as metrics; reads the host's `~/.aws` read-only |
-| Alertmanager | 9093 | Routes alerts by severity, for this Prometheus and the NAS one |
+| Alertmanager | 9093 | Routes alerts by severity, for this Prometheus and the NAS one; basic auth on every endpoint |
 | alert-issues | 9095 (compose network only) | Alertmanager's ticket receiver: one GitHub issue per alert |
 
-Alert delivery needs four secrets, each a file of one line with mode 600, owned by the user in `ALERTMANAGER_UID` (default 1000). Without them the stack runs and the notifications fail, visibly, in the two services' logs.
+Alert delivery needs secrets, each a file with mode 600, owned by the user in `ALERTMANAGER_UID` (default 1000). Without the four delivery secrets the stack runs and the notifications fail, visibly, in the two services' logs; without `web.yml` Alertmanager does not start.
 
 ```bash
 mkdir -p -m 700 alertmanager/secrets alertmanager/data alert-issues/secrets
@@ -69,6 +69,17 @@ read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_agent_observab
 read -rs v && printf %s "$v" > alertmanager/secrets/heartbeat_url_nas                  # ping URL, check 2
 read -rs v && printf %s "$v" > alert-issues/secrets/github_token                       # Issues read and write, one repo
 ```
+
+Every Alertmanager endpoint needs basic auth, because an alert posted to it can end up as a public issue. Each Prometheus gets a user and a random password: the bcrypt hash goes into `alertmanager/secrets/web.yml`, the password into a file only the Prometheus container user (`nobody`, 65534) can read. For this stack's Prometheus:
+
+```bash
+pw=$(openssl rand -hex 24)
+printf %s "$pw" | python3 -c 'import bcrypt, sys; print("basic_auth_users:\n  agent-observability: " + bcrypt.hashpw(sys.stdin.read().encode(), bcrypt.gensalt()).decode())' > alertmanager/secrets/web.yml
+sudo install -d -o 65534 -g 65534 -m 500 prometheus/secrets
+printf %s "$pw" | sudo install -o 65534 -g 65534 -m 400 /dev/stdin prometheus/secrets/alertmanager_password
+```
+
+A second Prometheus, such as the NAS one, gets its own line in `web.yml` and its own password file next to its config.
 
 Point Claude Code at the stack:
 
@@ -135,7 +146,7 @@ docker run --rm -v "$PWD/prometheus:/p:ro" -w /p/tests --entrypoint promtool \
   prom/prometheus:v3.5.0 test rules alerts_test.yml
 ```
 
-**Alerts reach a person.** One Alertmanager serves this stack's Prometheus and the NAS monitoring Prometheus, which sends over the LAN; each server's `external_labels` name it (`prometheus="agent-observability"` or `"nas"`). Severity picks the receiver. A `page` goes to Discord between 08:00 and 22:00 Europe/Berlin and always to the board as well, so a page at night waits as an issue and reaches Discord at 08:00 if it still fires. A `ticket` goes to `alert-issues`, which opens one GitHub issue per alert fingerprint (labels `kind:finding` and an `area:` label), refreshes it on repeats, closes it with a comment when the alert resolves and reopens it when the alert fires again; an issue a person closed stays closed for the rest of that firing episode. The board repository is public, so an issue carries the alert name, the summary and an allowlist of labels, never the description, the instance or the generator URL. `info` goes nowhere, and so do the AWS cost rules, which stay a dashboard showcase. Inhibition keeps one cause to one alert: a down Ollama silences the SLO burns behind it, a down SearXNG the SearXNG symptoms.
+**Alerts reach a person.** One Alertmanager serves this stack's Prometheus and the NAS monitoring Prometheus, which sends over the LAN; each server's `external_labels` name it (`prometheus="agent-observability"` or `"nas"`). Severity picks the receiver. A `page` goes to Discord between 08:00 and 22:00 Europe/Berlin and always to the board as well, so a page at night waits as an issue and reaches Discord at 08:00 if it still fires. A `ticket` goes to `alert-issues`, which opens one GitHub issue per alert fingerprint (labels `kind:finding` and an `area:` label), refreshes it on repeats, closes it with a comment when the alert resolves and reopens it when the alert fires again; an issue a person closed stays closed for the rest of that firing episode. The board repository is public, so an issue carries the alert name, the summary and an allowlist of labels, never the description, the instance or the generator URL. `info` goes nowhere, and so do the three AWS spend rules, which stay a dashboard showcase; `AWSCostExporterStale` is a ticket. Discord can keep showing a page as firing: a page that resolves outside waking hours sends its resolved message nowhere, so the board issue, which always closes, is the record. Inhibition keeps one cause to one alert: a down Ollama silences the SLO burns behind it, a down SearXNG the SearXNG symptoms.
 
 **Watching the watcher.** A dead Prometheus and a quiet night look the same, so each Prometheus carries an always-firing `Watchdog`. Alertmanager pings one outside heartbeat check per Prometheus every 5 minutes, and the check alarms when the pings stop: a dead Prometheus, Alertmanager, box or uplink all stop them. `AlertmanagerNotificationsFailing` turns a notification Alertmanager gave up on into a ticket. `scripts/check-alerting.sh` checks it all without sending anything: promtool on the config and every rule test, amtool on the config and the routing tree, every alert rule's severity against the route it promises (pass the NAS rule files as arguments to include them), and the receiver's unit tests.
 

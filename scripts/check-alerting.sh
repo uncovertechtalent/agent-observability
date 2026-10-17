@@ -44,6 +44,7 @@ route board alertname=SearXNGSlowSearches severity=ticket prometheus=agent-obser
 route board alertname=UCGMaxPollerScrapeFailing severity=ticket prometheus=nas
 route blackhole alertname=ModelSpilledToCPU severity=info prometheus=agent-observability
 route blackhole alertname=AWSCostDailySpike severity=ticket prometheus=agent-observability
+route board alertname=AWSCostExporterStale severity=ticket prometheus=agent-observability
 route heartbeat-agent-observability alertname=Watchdog severity=none prometheus=agent-observability
 route heartbeat-nas alertname=Watchdog severity=none prometheus=nas
 route blackhole alertname=Watchdog severity=none
@@ -65,7 +66,7 @@ while read -r name sev; do
   count=$((count + 1))
   case "$name:$sev" in
     Watchdog:none) want=heartbeat-agent-observability; extra=prometheus=agent-observability ;;
-    AWSCost*:*)    want=blackhole; extra= ;;
+    AWSCostForecastOverBudget:*|AWSCostMonthToDateOver80:*|AWSCostDailySpike:*) want=blackhole; extra= ;;
     *:page)        want=discord,board; extra= ;;
     *:ticket)      want=board; extra= ;;
     *:info)        want=blackhole; extra= ;;

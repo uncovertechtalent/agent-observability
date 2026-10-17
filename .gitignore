@@ -4,3 +4,4 @@ __pycache__/
 alertmanager/secrets/
 alertmanager/data/
 alert-issues/secrets/
+prometheus/secrets/

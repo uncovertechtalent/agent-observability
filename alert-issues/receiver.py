@@ -9,7 +9,8 @@ STATE_PATH; when it is lost, the receiver finds an issue again by the fingerprin
 
 The board repository is public, so an issue shows only the alert name, the summary
 annotation and an allowlist of labels. Descriptions, instance addresses and generator URLs
-stay out.
+stay out, and every shown value loses IPv4 addresses and URLs and cannot mention a person or
+link an issue.
 
 A failed GitHub call answers 500, and Alertmanager retries. Stdlib only.
 """
@@ -47,6 +48,9 @@ SHOWN_LABELS = ["severity", "prometheus", "job", "component", "name", "engine", 
 TITLE_LABELS = ["name", "engine", "model", "source"]
 FINGERPRINT = re.compile(r"[0-9a-f]{8,64}")
 MAX_REQUEST = 1 << 20
+URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I)
+IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+STARTED = re.compile(r"Alert fingerprint: ([0-9a-f]+), firing since ([^\s<]+)")
 
 
 class GitHub:
@@ -125,22 +129,32 @@ class State:
 
 
 def when(ts):
-    """Alertmanager's RFC 3339 time to '2026-10-17 13:40 UTC'; '' for the zero time."""
+    """Alertmanager's RFC 3339 time, any offset, to '2026-10-17 13:40 UTC'; '' for the zero time."""
     if not ts or ts.startswith("0001-"):
         return ""
-    try:
-        return datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").strftime("%Y-%m-%d %H:%M UTC")
-    except ValueError:
+    # Python before 3.11 takes neither "Z" nor nine fraction digits; cut to six.
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", ts)
+    if not m:
         return ""
+    t = datetime.fromisoformat(m[1] + (m[2] or "")[:7] + ("+00:00" if m[3] == "Z" else m[3]))
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def scrub(text, limit):
+    """What a public repository may show: no URL, no IPv4 address, no @mention, no #issue link."""
+    text = str(text)[:limit].replace("\n", " ")
+    text = URL.sub("[link removed]", text)
+    text = IPV4.sub("[address removed]", text)
+    # A zero-width space after "@" or "#" stops GitHub's mention and issue links.
+    return text.replace("@", "@\u200b").replace("#", "#\u200b")
 
 
 def code(value, limit=120):
-    return "`" + str(value)[:limit].replace("`", "'").replace("\n", " ") + "`"
+    return "`" + scrub(value, limit).replace("`", "'") + "`"
 
 
 def plain(text, limit=500):
-    # A zero-width space after "@" keeps a summary from mentioning anyone on a public repo.
-    return str(text)[:limit].replace("\n", " ").replace("@", "@​")
+    return scrub(text, limit)
 
 
 def area_label(labels):
@@ -152,9 +166,9 @@ def area_label(labels):
 
 
 def title(labels):
-    parts = [str(labels[k])[:40] for k in TITLE_LABELS if labels.get(k)]
+    parts = [scrub(labels[k], 40) for k in TITLE_LABELS if labels.get(k)]
     suffix = f" ({', '.join(parts)})" if parts else ""
-    return f"Alert: {labels.get('alertname', 'unnamed')}{suffix}"[:200]
+    return f"Alert: {scrub(labels.get('alertname', 'unnamed'), 100)}{suffix}"[:200]
 
 
 def body(alert, now):
@@ -176,7 +190,8 @@ def body(alert, now):
         f"([on-call routing]({DOCS})). This issue closes when the alert resolves and reopens "
         "when it fires again.",
         "",
-        f"<sub>Alert fingerprint: {alert['fingerprint']}</sub>",
+        # Read back when the state file is lost, so a person's close survives it.
+        f"<sub>Alert fingerprint: {alert['fingerprint']}, firing since {alert.get('startsAt') or '?'}</sub>",
     ]
     return "\n".join(lines)
 
@@ -204,6 +219,10 @@ class Receiver:
             found = self.gh.find_issue(fp)
             record = {"issue": found, "starts_at": None} if found else None
         issue = self.gh.get_issue(record["issue"]) if record else None
+        if issue and record.get("starts_at") is None:
+            m = STARTED.search(issue.get("body") or "")
+            if m and m[1] == fp:
+                record["starts_at"] = m[2]
 
         if status == "firing":
             if issue is None:
@@ -215,9 +234,11 @@ class Receiver:
             if issue["state"] == "closed":
                 if not new_episode:
                     return f"left #{number} closed"  # a person closed it during this episode
+                # State changes before comments: a retry after a failed comment loses the
+                # comment, never repeats it.
                 self.gh.update_issue(number, state="open", body=body(alert, now))
-                self.gh.comment(number, f"Firing again since {when(starts_at) or 'now'}.")
                 self.state.put(fp, {"issue": number, "starts_at": starts_at})
+                self.gh.comment(number, f"Firing again since {when(starts_at) or 'now'}.")
                 return f"reopened #{number}"
             self.gh.update_issue(number, body=body(alert, now))
             if new_episode:
@@ -230,8 +251,8 @@ class Receiver:
             number = issue["number"]
             if issue["state"] != "open":
                 return f"#{number} already closed"
-            self.gh.comment(number, f"Resolved at {when(alert.get('endsAt')) or 'now'}.")
             self.gh.update_issue(number, state="closed", state_reason="completed", body=body(alert, now))
+            self.gh.comment(number, f"Resolved at {when(alert.get('endsAt')) or 'now'}.")
             return f"closed #{number}"
 
         raise ValueError(f"unknown status {status!r}")

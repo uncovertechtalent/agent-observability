@@ -122,6 +122,28 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(fresh.handle({"alerts": [alert()]}), ["updated #1"])
         self.assertEqual(len(self.gh.issues), 1)
 
+    def test_lost_state_keeps_a_persons_close_in_the_same_episode(self):
+        self.rx.handle({"alerts": [alert()]})
+        self.gh.issues[1]["state"] = "closed"
+        os.remove(self.path)
+        fresh = receiver.Receiver(self.gh, receiver.State(self.path), clock=lambda: NOW)
+        self.assertEqual(fresh.handle({"alerts": [alert()]}), ["left #1 closed"])
+        self.assertEqual(fresh.handle({"alerts": [alert(starts="2026-10-17T16:00:00Z")]}), ["reopened #1"])
+
+    def test_a_failed_comment_is_not_repeated_on_retry(self):
+        self.rx.handle({"alerts": [alert()]})
+        real = self.gh.comment
+
+        def broken(number, body):
+            raise urllib.error.URLError("github down")
+        self.gh.comment = broken
+        with self.assertRaises(urllib.error.URLError):
+            self.rx.handle({"alerts": [alert("resolved", ends="2026-10-17T13:55:00Z")]})
+        self.gh.comment = real
+        self.assertEqual(self.rx.handle({"alerts": [alert("resolved", ends="2026-10-17T13:55:00Z")]}),
+                         ["#1 already closed"])
+        self.assertEqual(self.gh.comments, [])
+
     def test_deleted_issue_gets_a_new_one(self):
         self.rx.handle({"alerts": [alert()]})
         del self.gh.issues[1]
@@ -150,6 +172,22 @@ class ReceiverTest(unittest.TestCase):
         a["annotations"]["summary"] = "ping @skjoldar now"
         self.rx.handle({"alerts": [a]})
         self.assertNotIn("@skjoldar", self.gh.issues[1]["body"])
+
+    def test_shown_values_lose_addresses_urls_and_issue_links(self):
+        a = alert(name="gw 10.0.0.1")
+        a["annotations"]["summary"] = "see http://192.168.1.249:3030/d/x and 192.168.1.1:8443, like #36 and o/r#7"
+        self.rx.handle({"alerts": [a]})
+        issue = self.gh.issues[1]
+        for leaked in ("192.168.", "10.0.0.1", "http://", "#36", "r#7"):
+            self.assertNotIn(leaked, issue["body"] + issue["title"])
+        self.assertIn("[link removed]", issue["body"])
+        self.assertIn("[address removed]", issue["title"])
+
+    def test_times_with_an_offset_are_shown_in_utc(self):
+        self.assertEqual(receiver.when("2026-10-17T15:40:00.123456789+02:00"), "2026-10-17 13:40 UTC")
+        self.assertEqual(receiver.when("2026-10-17T13:40:00Z"), "2026-10-17 13:40 UTC")
+        self.assertEqual(receiver.when("0001-01-01T00:00:00Z"), "")
+        self.assertEqual(receiver.when("garbage"), "")
 
     def test_bad_input_is_rejected(self):
         with self.assertRaises(ValueError):
