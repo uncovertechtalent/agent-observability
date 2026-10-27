@@ -333,8 +333,9 @@ def render():
         def latest_and_median(rows, skip=()):
             """Per key: the latest complete day's cost and the median of the MEDIAN_DAYS days before it, zero-filled."""
             keys = {k for d in baseline_days + ([latest] if latest else []) for k in rows.get(d, {})} - set(skip)
-            return [(k, rows.get(latest, {}).get(k, 0.0), median([rows.get(d, {}).get(k, 0.0) for d in baseline_days]))
-                    for k in sorted(keys)]
+            out = [(k, rows.get(latest, {}).get(k, 0.0), median([rows.get(d, {}).get(k, 0.0) for d in baseline_days]))
+                   for k in sorted(keys)]
+            return [x for x in out if x[1] or x[2]]  # a key that is zero on every day (a zero-amount group) says nothing
 
         # month to date against the same calendar days of the month before: complete days 1..n of each
         n = today_d.day - 1
