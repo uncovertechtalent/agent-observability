@@ -146,3 +146,15 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).
+      # Report mode only: the exporter keeps polling S3 and succeeding while no new delivery lands (a deleted
+      # report definition, a broken bucket policy, the billing service paused). Deliveries come up to three
+      # times a day; 36 hours without one is a fault. A report that has never delivered shows on the dashboard
+      # (no line items) and is not an alert.
+      - alert: AWSCostReportStale
+        expr: |
+          max(aws_cost_source_info{source="cur"}) == 1
+          and on() time() - max(aws_cost_report_delivery_timestamp_seconds) > 36 * 3600
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: The cost and usage report has not been delivered to S3 for 36 hours; the exporter serves the last delivery.

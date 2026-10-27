@@ -102,7 +102,7 @@ def line(d, line_type, code, name, usage, rid, cost, tag=""):
 def report_lines(today):
     """October 2026 as the report would list it: per day an instance (USD 1 of hours, USD 0.5 of data transfer
     out, both under AmazonEC2), two S3 buckets (0.15 and 0.05), a Bedrock model tagged model-evals through the
-    cost allocation tag (0.1), the tax line on the 1st (9.5) and a credit (-2) on the 2nd; the delivery day
+    cost allocation tag (0.1), the tax line on the 1st (9.5), a credit (-2) on the 2nd and a zero Fee line on the 3rd; the delivery day
     (today) carries half a day."""
     out, d = [], exporter.month_start(today)
     while d <= today:
@@ -118,6 +118,8 @@ def report_lines(today):
             out.append(line(s, "Tax", "AmazonEC2", "Amazon Elastic Compute Cloud", "", "", 9.5))
         if d.day == 2:
             out.append(line(s, "Credit", "AmazonEC2", "Amazon Elastic Compute Cloud", "EUC1-BoxUsage:t3.small", "", -2.0))
+        if d.day == 3:
+            out.append(line(s, "Fee", "AmazonEC2", "Amazon Elastic Compute Cloud", "", "", 0.0))
         d += timedelta(days=1)
     return out
 
@@ -271,32 +273,33 @@ def main():
 
     exporter.CUR_BUCKET = "bucket"
     delivered = datetime(2026, 10, 27, 19, 22, tzinfo=timezone.utc)  # after noon: only the delivery day may change
-    assert exporter.cur_cutoff(delivered.timestamp()) == today
-    assert exporter.cur_cutoff(datetime(2026, 10, 27, 2, 39, tzinfo=timezone.utc).timestamp()) == today - timedelta(days=1)
+    assert exporter.report_cutoff(delivered.timestamp()) == today
+    assert exporter.report_cutoff(datetime(2026, 10, 27, 2, 39, tzinfo=timezone.utc).timestamp()) == today - timedelta(days=1)
     s3 = FakeS3(report_bucket(today, delivered))
     exporter.cache = build_cache(today)  # Cost Explorer's September stays as the history; its October is replaced
     # a backfilled month older than the window, and its record types, age out at render time
     exporter.cache["history"]["days"]["2026-06-15"] = {"Amazon Simple Storage Service": {"EUC1-TimedStorage-ByteHrs": 3.0}}
     exporter.cache["records"]["months"]["2026-06"] = {"Usage": 3.0}
-    exporter.fetch_cur(s3, now=1000.0, today=today)
-    part = exporter.cache["cur"]
+    exporter.fetch_report(s3, now=1000.0, today=today)
+    part = exporter.cache["report"]
     assert set(part["periods"]) == {"2026-10"}, part["periods"].keys()  # the September folder has no manifest yet
     oct_ = part["periods"]["2026-10"]
-    assert oct_["rows"] == 27 * 5 + 2 and oct_["etag"] == '"etag-1"' and oct_["delivered"] == delivered.timestamp()
+    assert oct_["rows"] == 27 * 5 + 3 and oct_["etag"] == '"etag-1"' and oct_["delivered"] == delivered.timestamp()
+    assert "Upfront" in oct_["records"]["2026-10"] and "Fee" not in oct_["records"]["2026-10"]
     assert oct_["tags"] == {"foundation-model/anthropic.claude": "model-evals"}
     assert oct_["records"]["2026-10"]["Tax"] == 9.5 and oct_["records"]["2026-10"]["Credit"] == -2.0
     assert exporter.cache["requests"]["s3:GetObject"] == 2 and exporter.cache["requests"]["s3:HeadObject"] == 2
     # an unchanged manifest is not read again; a new ETag is
-    exporter.fetch_cur(s3, now=2000.0, today=today)
+    exporter.fetch_report(s3, now=2000.0, today=today)
     assert exporter.cache["requests"]["s3:GetObject"] == 2
     s3.objects["finops/finops/20261001-20261101/finops-Manifest.json"] = (
         s3.objects["finops/finops/20261001-20261101/finops-Manifest.json"][0], '"etag-2"', delivered)
-    exporter.fetch_cur(s3, now=3000.0, today=today)
-    assert exporter.cache["requests"]["s3:GetObject"] == 4 and exporter.cache["cur"]["periods"]["2026-10"]["etag"] == '"etag-2"'
+    exporter.fetch_report(s3, now=3000.0, today=today)
+    assert exporter.cache["requests"]["s3:GetObject"] == 4 and exporter.cache["report"]["periods"]["2026-10"]["etag"] == '"etag-2"'
 
     r = parse(exporter.render())
     assert get(r, "aws_cost_source_info", source="cur") == 1
-    assert get(r, "aws_cost_report_line_items", period="2026-10") == 137
+    assert get(r, "aws_cost_report_line_items", period="2026-10") == 138
     assert get(r, "aws_cost_report_delivery_timestamp_seconds", period="2026-10") == round(delivered.timestamp())
     per_day = 1.0 + 0.5 + 0.15 + 0.05 + 0.1
     assert abs(get(r, "aws_cost_mtd_usd") - (per_day * 26 + per_day / 2 + 9.5 - 2.0)) < 1e-6, get(r, "aws_cost_mtd_usd")
@@ -322,7 +325,7 @@ def main():
     assert abs(get(r, "aws_cost_mtd_by_resource_usd", service="EC2 - Other", resource_id="i-0abc", cost_center="data-transfer") - 13.25) < 1e-6
     assert abs(get(r, "aws_cost_mtd_by_resource_usd", service="Amazon Bedrock", resource_id="foundation-model/anthropic.claude", cost_center="model-evals") - 2.65) < 1e-6
     assert get(r, "aws_cost_mtd_by_resource_usd", service="Tax", resource_id="(none)", cost_center="tax") == 9.5
-    assert get(r, "aws_cost_resources", period="this_month") == 7, rows(r, "aws_cost_resources")
+    assert get(r, "aws_cost_resources", period="this_month") == 8, rows(r, "aws_cost_resources")  # the zero fee line is a pair too
     assert get(r, "aws_cost_mtd_resource_rest_usd") == 0  # everything fits under RESOURCE_LIMIT
     assert get(r, "aws_cost_day_by_resource_usd", day="2026-10-10", service="Amazon Simple Storage Service", resource_id="site-bucket") == 0.05
     assert get(r, "aws_cost_resource_latest_day_usd", service="Amazon Simple Storage Service", resource_id="backup-bucket") == 0.15
@@ -332,7 +335,7 @@ def main():
     done = per_day * 26 - 2.0  # days 1 to 26 with the credit; the tax (SPIKE_EXCLUDE) is outside the rate
     assert get(r, "aws_cost_forecast_info", method="run_rate") == 1
     assert abs(get(r, "aws_cost_month_forecast_usd") - (done + done / 26 * 5 + 9.5)) < 1e-6, get(r, "aws_cost_month_forecast_usd")
-    assert get(r, "aws_cost_exporter_fetch_timestamp_seconds", part="cur") == 3000.0
+    assert get(r, "aws_cost_exporter_fetch_timestamp_seconds", part="report") == 3000.0
     # a rule on resource ids: the site bucket moves to its own cost center, in the usage-type series too
     exporter.ALLOCATION["rules"].insert(0, {"cost_center": "sites", "services": ["Amazon Simple Storage Service"], "resource_ids": ["site-*"]})
     exporter._centers.clear()
@@ -348,24 +351,27 @@ def main():
     # each period's own delivery sets its cutoff: a closed month refreshed after this month's early delivery
     # does not make this month's open day complete
     early = datetime(2026, 10, 27, 2, 39, tzinfo=timezone.utc).timestamp()
-    saved = exporter.cache["cur"]["periods"]["2026-10"]["delivered"]
-    exporter.cache["cur"]["periods"]["2026-10"]["delivered"] = early
-    exporter.cache["cur"]["periods"]["2026-09"] = {"days": {}, "records": {}, "tags": {}, "unit": "USD", "rows": 0,
+    saved = exporter.cache["report"]["periods"]["2026-10"]["delivered"]
+    exporter.cache["report"]["periods"]["2026-10"]["delivered"] = early
+    exporter.cache["report"]["periods"]["2026-09"] = {"days": {}, "records": {}, "tags": {}, "unit": "USD", "rows": 0,
                                                    "etag": '"s"', "delivered": delivered.timestamp(), "fetched": 1.0, "keys": []}
     r4 = parse(exporter.render())
     assert get(r4, "aws_cost_day_total_usd", day="2026-10-26", estimated="true") == per_day
     assert get(r4, "aws_cost_latest_day_info", day="2026-10-25") == 1
-    exporter.cache["cur"]["periods"]["2026-10"]["delivered"] = saved
-    del exporter.cache["cur"]["periods"]["2026-09"]
+    assert get(r4, "aws_cost_to_date_days") == 25  # the 26th is open, so days 1 to 25 compare on both sides
+    assert abs(get(r4, "aws_cost_to_date_usd", period="this_month") - (per_day * 25 + 9.5 - 2.0)) < 1e-6
+    assert not rows(r4, "aws_cost_to_date_by_service_usd") or all(x["period"] == "this_month" for x, _ in rows(r4, "aws_cost_to_date_by_service_usd"))  # the empty September period replaced the history
+    exporter.cache["report"]["periods"]["2026-10"]["delivered"] = saved
+    del exporter.cache["report"]["periods"]["2026-09"]
     # an empty prefix lists the report straight under the bucket
     exporter.CUR_PREFIX = ""
     flat = FakeS3(report_bucket(today, delivered, root="finops/"))
-    exporter.cache["cur"] = {}
-    exporter.fetch_cur(flat, now=4000.0, today=today)
-    assert set(exporter.cache["cur"]["periods"]) == {"2026-10"} and exporter.cache["cur"]["report"] == "bucket/finops/"
+    exporter.cache["report"] = {}
+    exporter.fetch_report(flat, now=4000.0, today=today)
+    assert set(exporter.cache["report"]["periods"]) == {"2026-10"} and exporter.cache["report"]["report"] == "bucket/finops/"
     exporter.CUR_PREFIX = "finops"
-    exporter.cache["cur"] = {}
-    exporter.fetch_cur(s3, now=5000.0, today=today)
+    exporter.cache["report"] = {}
+    exporter.fetch_report(s3, now=5000.0, today=today)
     # the top-N cap: with room for one resource, the rest is summed and the instance (the costliest) stays
     exporter.RESOURCE_LIMIT = 1
     r3 = parse(exporter.render())
@@ -382,8 +388,13 @@ def main():
         def describe_budgets(self, **kw):
             return {"Budgets": []}
 
-    exporter.fetch(NoCE(), Budgets(), "123", s3)
+    exporter.fetch(NoCE(), Budgets(), "123")
     assert exporter.cache["budgets"]["items"] == []
+    # the report part is due after CUR_SECONDS, and at once when the bucket or prefix changed
+    assert not exporter.report_due(5000.0 + exporter.CUR_SECONDS - 1) and exporter.report_due(5000.0 + exporter.CUR_SECONDS)
+    exporter.CUR_PREFIX = "elsewhere"
+    assert exporter.report_due(5000.0)
+    exporter.CUR_PREFIX = "finops"
     # without a file for this month yet, this month comes from Cost Explorer; nothing else does
     calls = []
 
@@ -399,13 +410,12 @@ def main():
         def get_cost_forecast(self, **kw):
             raise AssertionError("forecast asked in report mode")
 
-    exporter.cache["cur"]["periods"] = {}
+    exporter.cache["report"]["periods"] = {}
     exporter.cache["current"]["fetched"] = 0
-    exporter.cache["cur"]["fetched"] = 1e12  # not due
-    exporter.fetch(CE(), Budgets(), "123", s3)
+    exporter.fetch(CE(), Budgets(), "123")
     assert calls == ["SERVICE:2026-10-01"], calls
     # and the month Cost Explorer filled in reads as in Cost Explorer mode: the latest complete day is yesterday
-    exporter.cache = {**build_cache(today), "cur": {"v": 1, "report": "x", "periods": {}, "fetched": 1.0}}
+    exporter.cache = {**build_cache(today), "report": {"v": 1, "report": "x", "periods": {}, "fetched": 1.0}}
     gap = parse(exporter.render())
     assert get(gap, "aws_cost_source_info", source="cur") == 1
     assert get(gap, "aws_cost_latest_day_info", day="2026-10-26") == 1

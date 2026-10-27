@@ -254,3 +254,31 @@ tests:
           - exp_labels: {severity: ticket}
             exp_annotations:
               summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).
+  # AWSCostReportStale: report mode, the last delivery at t=0, nothing since: quiet at 30 h, a ticket at 37 h
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_source_info{source="cur"}'
+        values: '1x2400'
+      - series: 'aws_cost_report_delivery_timestamp_seconds{period="2026-10"}'
+        values: '0x2400'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: AWSCostReportStale
+        exp_alerts: []
+      - eval_time: 37h
+        alertname: AWSCostReportStale
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: The cost and usage report has not been delivered to S3 for 36 hours; the exporter serves the last delivery.
+  # the same stale timestamp in Cost Explorer mode is nothing
+  - interval: 1m
+    input_series:
+      - series: 'aws_cost_source_info{source="cost_explorer"}'
+        values: '1x2400'
+      - series: 'aws_cost_report_delivery_timestamp_seconds{period="2026-10"}'
+        values: '0x2400'
+    alert_rule_test:
+      - eval_time: 37h
+        alertname: AWSCostReportStale
+        exp_alerts: []

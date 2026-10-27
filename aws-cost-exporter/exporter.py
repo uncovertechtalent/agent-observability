@@ -5,7 +5,8 @@ Source. With CUR_BUCKET set the exporter reads the account's cost and usage repo
 CUR: daily line items with resource ids, CSV gzip, one folder per billing period under
 CUR_PREFIX/CUR_REPORT/, overwritten up to three times a day). Every CUR_SECONDS (default 1 h) it
 lists the periods, HEADs each manifest and reads the files of a period again only when the
-manifest's ETag changed. Reading costs S3 requests only. Cost Explorer (USD 0.01 per request) is
+manifest's ETag changed; the read runs outside the exporter's lock, so /metrics answers from the
+last state meanwhile. Reading costs S3 requests only. Cost Explorer (USD 0.01 per request) is
 then asked for three things only: this month, while the report has no file for it yet (a new
 report delivers within 24 h; a new month within a day); and, once, the history of the months
 before the report existed and their record types, so a fresh install has last month to compare
@@ -19,9 +20,11 @@ in the cache, so aws_cost_explorer_spend_usd_total shows what the exporter itsel
 Names. Report lines are given the service names Cost Explorer uses, so the allocation rules and
 the dashboards read the same names from both sources: tax lines are the service "Tax", and EC2
 splits into "Amazon Elastic Compute Cloud - Compute" (instance hours) and "EC2 - Other" (volumes,
-addresses, data transfer). Resource ids lose their ARN prefix (distribution/E1, hostedzone/Z1,
-i-0abc, a bucket name). The month-end forecast is Cost Explorer's in Cost Explorer mode and the
-run rate of this month's complete days in report mode.
+addresses, data transfer); the report's line item types Fee and RIFee are Cost Explorer's record
+types Upfront and Recurring. Resource ids lose their ARN prefix (distribution/E1, hostedzone/Z1,
+i-0abc, a bucket name). The month-end forecast is Cost Explorer's in Cost Explorer mode and, in
+report mode, the run rate of this month's complete days without the once-a-period services
+(SPIKE_EXCLUDE), whose month to date is added once.
 
 Virtual tags: allocation.json maps every line to a cost center by rule on (service, usage type,
 resource id), the way a FinOps tool's virtual tags do, and a line no rule matches is
@@ -34,14 +37,15 @@ once, at start, and checked: a rule or an item that names a cost center the allo
 not list stops the exporter with a message.
 
 Credentials come from the host's AWS shared config, mounted read-only (AWS_PROFILE picks the
-profile). The metrics carry real spend: the dashboards are internal and never shared. The days a
-delivery may still change (the delivery's own day, and the day before when it came before noon
-UTC) are marked estimated and left out of the complete-day series.
+profile; the README lists the least-privilege policy). The metrics carry real spend: the
+dashboards are internal and never shared. The days a delivery may still change (the delivery's
+own day, and the day before when it came before noon UTC) are marked estimated and left out of
+the complete-day series, and the to-date comparison stops before the first of them.
 
 Rolling back to an exporter from before cache version 2 needs the cache volume removed first
 (docker volume rm agent-observability_aws_cost_exporter_data; about five requests refill it): the
 old code reads a day's services as numbers, and version 2 stores a dict of usage types per
-service. The report part of the cache ("cur") is ignored by older code.
+service. The report part of the cache ("report") is ignored by older code.
 """
 
 import csv
@@ -83,11 +87,14 @@ RESOURCE_MONTHS = int(os.environ.get("RESOURCE_MONTHS", "2"))  # months of daily
 CE_PRICE = 0.01  # USD per Cost Explorer API request
 METRIC = "UnblendedCost"
 CACHE_VERSION = 2  # bump when the shape of a Cost Explorer part changes; older parts are fetched again
-CUR_VERSION = 1  # the same for the report part
+REPORT_VERSION = 1  # the same for the report part
 UNALLOCATED = "unallocated"
 NO_RESOURCE = "(none)"
 # Usage types Cost Explorer files under "Amazon Elastic Compute Cloud - Compute"; the rest of EC2 is "EC2 - Other".
 EC2_COMPUTE = ("*BoxUsage*", "*SpotUsage*", "*HeavyUsage*", "*DedicatedUsage*", "*HostUsage*", "*UnusedBox*")
+# The report's line item types under Cost Explorer's record type names; the others (Usage, Tax, Credit,
+# Refund, DiscountedUsage, SavingsPlan*) share their names.
+RECORD_TYPES = {"Fee": "Upfront", "RIFee": "Recurring"}
 
 lock = threading.Lock()
 cache = {"requests": {}, "errors": 0}
@@ -256,6 +263,11 @@ def monthly_by_record_type(ce, start, end):
 
 # ---------------------------------------------------------------- the cost and usage report
 
+def report_path():
+    """The key prefix of the report's billing period folders: <prefix>/<report>/ (no prefix: <report>/)."""
+    return "/".join(x for x in (CUR_PREFIX, CUR_REPORT) if x) + "/"
+
+
 def ce_service(code, name, usage_type, line_type):
     """The Cost Explorer SERVICE name of one report line (see the module docstring, Names)."""
     if line_type == "Tax":
@@ -273,9 +285,9 @@ def short_resource(rid):
     return rid
 
 
-def cur_aggregate(rows):
+def report_aggregate(rows):
     """One billing period's line items as the cache keeps them: days (day -> service -> usage type ->
-    resource id -> cost), records (month -> line item type -> cost), tags (resource id -> the cost
+    resource id -> cost), records (month -> record type -> cost), tags (resource id -> the cost
     allocation tag's value, when allocation.json names one), the currency and the row count."""
     days, records, tags = {}, {}, {}
     unit, n = None, 0
@@ -294,7 +306,8 @@ def cur_aggregate(rows):
         res = days.setdefault(day, {}).setdefault(service, {}).setdefault(usage, {})
         res[rid] = res.get(rid, 0.0) + cost
         rec = records.setdefault(day[:7], {})
-        rec[line_type] = rec.get(line_type, 0.0) + cost
+        record = RECORD_TYPES.get(line_type, line_type)
+        rec[record] = rec.get(record, 0.0) + cost
         if col and rid and r.get(col):
             tags[rid] = r[col]
     return {"days": days, "records": records, "tags": tags, "unit": unit or "USD", "rows": n}
@@ -306,25 +319,40 @@ def is_missing(e):
     return code in ("404", "NoSuchKey", "NotFound") or "(404)" in str(e) or "Not Found" in str(e)
 
 
-def report_rows(s3, keys):
+def report_rows(s3, keys, counts):
     """The line items of the report files, streamed: gzip and CSV are decoded as they are read."""
     for k in keys:
         body = s3.get_object(Bucket=CUR_BUCKET, Key=k)["Body"]
-        count("s3:GetObject")
+        counts["s3:GetObject"] = counts.get("s3:GetObject", 0) + 1
         raw = gzip.GzipFile(fileobj=body) if k.endswith(".gz") else io.BytesIO(body.read())
         yield from csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8", newline=""))
 
 
-def fetch_cur(s3, now, today):
+def report_due(now):
+    """Whether the report part is due: older than CUR_SECONDS, or written for another bucket or prefix."""
+    part = cache.get("report", {})
+    return now - part.get("fetched", 0) >= CUR_SECONDS or part.get("report") != f"{CUR_BUCKET}/{report_path()}"
+
+
+def fetch_report(s3, now, today):
     """Read the report's billing periods whose manifest changed. The periods are the folders under
     CUR_PREFIX/CUR_REPORT/ (YYYYMMDD-YYYYMMDD); each holds <report>-Manifest.json, whose reportKeys
     name the data files of the latest delivery (both versioning modes). Periods older than
-    HISTORY_MONTHS, or gone from the bucket, leave the cache."""
-    base = "/".join(x for x in (CUR_PREFIX, CUR_REPORT) if x) + "/"
+    HISTORY_MONTHS, or gone from the bucket, leave the cache.
+
+    Runs without the lock: it reads the cached part, builds the new one and swaps it in under the
+    lock at the end, with the request counts, so /metrics keeps answering during the read."""
+    base = report_path()
     report = f"{CUR_BUCKET}/{base}"
-    part = cache.get("cur", {})
-    if part.get("v") != CUR_VERSION or part.get("report") != report:
-        part = {"v": CUR_VERSION, "report": report, "periods": {}}
+    with lock:
+        old = cache.get("report", {})
+        part = {"v": REPORT_VERSION, "report": report, "periods": dict(old.get("periods", {}))} \
+            if old.get("v") == REPORT_VERSION and old.get("report") == report else {"v": REPORT_VERSION, "report": report, "periods": {}}
+    counts = {}
+
+    def c(api):
+        counts[api] = counts.get(api, 0) + 1
+
     keep = month_start(today, HISTORY_MONTHS).isoformat()[:7]
     periods, token = {}, None
     while True:
@@ -332,7 +360,7 @@ def fetch_cur(s3, now, today):
         if token:
             args["ContinuationToken"] = token
         r = s3.list_objects_v2(**args)
-        count("s3:ListObjectsV2")
+        c("s3:ListObjectsV2")
         for cp in r.get("CommonPrefixes", []):
             folder = cp["Prefix"][len(base):].strip("/")
             if len(folder) == 17 and folder[8] == "-" and folder[:8].isdigit():
@@ -352,13 +380,13 @@ def fetch_cur(s3, now, today):
                 continue
             raise
         finally:
-            count("s3:HeadObject")
+            c("s3:HeadObject")
         if part["periods"].get(month, {}).get("etag") == head["ETag"]:
             continue
         manifest = json.loads(s3.get_object(Bucket=CUR_BUCKET, Key=key)["Body"].read())
-        count("s3:GetObject")
+        c("s3:GetObject")
         keys = manifest.get("reportKeys", [])
-        agg = cur_aggregate(report_rows(s3, keys))
+        agg = report_aggregate(report_rows(s3, keys, counts))
         delivered = head["LastModified"].timestamp()
         part["periods"][month] = {**agg, "etag": head["ETag"], "delivered": delivered, "fetched": now, "keys": keys}
         log(f"report {month}: {agg['rows']} line items in {len(agg['days'])} days from {len(keys)} file(s), "
@@ -367,10 +395,13 @@ def fetch_cur(s3, now, today):
         if month < keep or month not in periods:
             del part["periods"][month]
     part["fetched"] = now
-    cache["cur"] = part
+    with lock:
+        for api, n in counts.items():
+            count(api, n)
+        cache["report"] = part
 
 
-def cur_cutoff(delivered):
+def report_cutoff(delivered):
     """The first UTC day a delivery may still change: the delivery's day, or the day before when the
     delivery came before noon UTC (the report lags its usage by hours)."""
     t = datetime.fromtimestamp(delivered, timezone.utc)
@@ -379,16 +410,15 @@ def cur_cutoff(delivered):
 
 # ---------------------------------------------------------------- the poll
 
-def fetch(ce, budgets, account, s3=None):
+def fetch(ce, budgets, account):
+    """The Cost Explorer and AWS Budgets parts that are due. Runs under the lock; every call here is
+    one small API answer. The report part is fetch_report's, outside the lock."""
     now = time.time()
     today = utc_today()
     this_month, following = month_start(today), next_month(today)
     hist_start = month_start(today, HISTORY_MONTHS)
     report = bool(CUR_BUCKET)
-
-    if report and now - cache.get("cur", {}).get("fetched", 0) >= CUR_SECONDS:
-        fetch_cur(s3, now, today)
-    report_has_month = this_month.isoformat()[:7] in cache.get("cur", {}).get("periods", {}) if report else False
+    report_has_month = this_month.isoformat()[:7] in cache.get("report", {}).get("periods", {}) if report else False
 
     cur = cache.get("current", {})
     if not report_has_month and (cur.get("v") != CACHE_VERSION or cur.get("month") != this_month.isoformat()
@@ -412,7 +442,7 @@ def fetch(ce, budgets, account, s3=None):
         cache["forecast"] = fc
 
     # In report mode the history is fetched once (the months before the report) and kept as it is;
-    # the report's own months replace it at render time and age it out.
+    # the report's own months replace it at render time and the window ages it out.
     hist = cache.get("history", {})
     if (not report and (hist.get("v") != CACHE_VERSION or hist.get("start") != hist_start.isoformat()
                         or hist.get("end") != this_month.isoformat() or now - hist.get("fetched", 0) >= HISTORY)) \
@@ -468,8 +498,10 @@ def poller():
         try:
             if not account:
                 account = session.client("sts", region_name="us-east-1").get_caller_identity()["Account"]
+            if s3 and report_due(time.time()):
+                fetch_report(s3, time.time(), utc_today())  # outside the lock; swaps its part in at the end
             with lock:
-                fetch(ce, budgets, account, s3)
+                fetch(ce, budgets, account)
                 cache["last_success"] = time.time()
                 save()
         except Exception as e:  # keep serving the cache; the error count shows on the dashboard
@@ -518,7 +550,7 @@ def render():
 
     with lock:
         cur, hist = cache.get("current", {}), cache.get("history", {})
-        periods = cache.get("cur", {}).get("periods", {}) if CUR_BUCKET else {}
+        periods = cache.get("report", {}).get("periods", {}) if CUR_BUCKET else {}
         today_d = utc_today()
         today = today_d.isoformat()
         this_month = today[:7]
@@ -542,7 +574,7 @@ def render():
             delivered[month] = p["delivered"]
             # the days this period's own latest delivery may still change (a refreshed closed month says
             # nothing about this month's cutoff)
-            open_days |= {d for d in p["days"] if d >= cur_cutoff(p["delivered"]).isoformat()}
+            open_days |= {d for d in p["days"] if d >= report_cutoff(p["delivered"]).isoformat()}
         # Cost Explorer's estimate flag is informational (it marks the whole current month); only the
         # report's open days leave the complete-day series
         estimated |= open_days
@@ -621,8 +653,12 @@ def render():
             method = "cost_explorer"
 
         # month to date against the same calendar days of the month before: complete days 1..n of each,
-        # n capped at the length of the month before (28 or 29 at the end of March)
+        # n capped at the length of the month before (28 or 29 at the end of March) and at the day before
+        # the first day of this month a delivery may still change
         n = min(today_d.day - 1, (month_start(today_d) - timedelta(days=1)).day)
+        first_open = min((d for d in open_days if d[:7] == this_month), default=None)
+        if first_open:
+            n = min(n, int(first_open[8:10]) - 1)
         to_date = {}
         for d in days:
             if d[:7] in (this_month, prior_month) and int(d[8:10]) <= n:
@@ -667,7 +703,8 @@ def render():
           [({"month": mo, "cost_center": c}, round(v, 6)) for (mo, c), v in sorted(cc_months.items()) if abs(v) >= 1e-6])
         m("aws_cost_month_total_usd", "gauge", "Unblended cost of a calendar month, all services (this month: to date).",
           [({"month": mo}, round(v, 6)) for mo, v in sorted(month_tot.items())])
-        m("aws_cost_month_record_usd", "gauge", "Unblended cost of a calendar month by record type: Usage, Tax, Credit, Refund and the like.",
+        m("aws_cost_month_record_usd", "gauge", "Unblended cost of a calendar month by record type: Usage, Tax, Credit, Refund and the like "
+          "(Cost Explorer's names; the report's Fee and RIFee read as Upfront and Recurring).",
           [({"month": mo, "record_type": t}, round(v, 6)) for mo, row in sorted(records.items()) for t, v in sorted(row.items()) if abs(v) >= 1e-6])
         m("aws_cost_mtd_usd", "gauge", "This month to date, today's partial cost included.",
           [({}, round(mtd_total, 6))] if has_month else [])
@@ -691,7 +728,8 @@ def render():
            for (d, s, name), v in sorted(res_day.items()) if (s, name) in top and abs(v) >= 1e-6])
         m("aws_cost_allocated_ratio", "gauge", "Share of this month's cost that a rule in allocation.json (or the cost allocation tag) maps to a cost center.",
           [({}, round(allocated / mtd_total, 6))] if mtd_total > 0 else [])
-        m("aws_cost_to_date_days", "gauge", "Complete days of the month compared in the to-date series: 1 to the day before today, capped at the length of the month before.",
+        m("aws_cost_to_date_days", "gauge", "Complete days of the month compared in the to-date series: 1 to the day before today, capped at the "
+          "length of the month before and at the day before the first day a report delivery may still change.",
           [({}, n)] if has_month else [])
         m("aws_cost_to_date_usd", "gauge", "Cost of the complete days 1 to N of this month, and of the same days of the month before.",
           [({"period": p}, round(v, 6)) for (p, kind, k), v in sorted(to_date.items()) if kind == ""])
@@ -757,7 +795,7 @@ def render():
         m("aws_cost_explorer_spend_usd_total", "counter", "What the exporter's Cost Explorer requests cost, at USD 0.01 each.",
           [({}, round(ce_n * CE_PRICE, 2))])
         m("aws_cost_exporter_fetch_timestamp_seconds", "gauge", "When each part was last fetched.",
-          [({"part": k}, cache[k]["fetched"]) for k in ("current", "forecast", "history", "records", "budgets", "cur") if k in cache and "fetched" in cache[k]])
+          [({"part": k}, cache[k]["fetched"]) for k in ("current", "forecast", "history", "records", "budgets", "report") if k in cache and "fetched" in cache[k]])
         m("aws_cost_exporter_last_success_timestamp_seconds", "gauge", "Last poll loop (every 5 min) that ended without an error.",
           [({}, cache.get("last_success"))])
         m("aws_cost_exporter_errors_total", "counter", "Failed polls, kept across restarts.", [({}, cache.get("errors", 0))])
@@ -787,6 +825,7 @@ def main():
     try:
         with open(CACHE_FILE) as f:
             cache = {**cache, **json.load(f)}
+        cache.pop("cur", None)  # the report part's name before 2026-10-28; fetched again under "report"
         log(f"cache loaded, requests so far {cache['requests']}")
     except FileNotFoundError:
         log("no cache yet")
@@ -796,7 +835,7 @@ def main():
             log(f"config error: {p}")
         return 2
     log(f"allocation: {len(ALLOCATION.get('rules', []))} rules; fixed costs: {len(FIXED.get('items', []))} items from {FIXED_COSTS_FILE}")
-    log(f"source: {'cost and usage report ' + '/'.join(x for x in (CUR_PREFIX, CUR_REPORT) if x) + ' in S3, checked every ' + str(CUR_SECONDS) + ' s' if CUR_BUCKET else 'Cost Explorer'}")
+    log(f"source: {'cost and usage report ' + report_path() + ' in S3, checked every ' + str(CUR_SECONDS) + ' s' if CUR_BUCKET else 'Cost Explorer'}")
     threading.Thread(target=poller, daemon=True).start()
     log(f"serving :{PORT}/metrics")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
