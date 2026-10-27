@@ -1,0 +1,21 @@
+{
+  "about": "Virtual tags. The account carries no cost allocation tags, so every (service, usage type) pair maps to a cost center by rule, the way a FinOps tool's virtual tags do. The first matching rule wins. A rule matches when the service is in its services list (if given) and the usage type matches one of its usage_types glob patterns (if given). A pair no rule matches is 'unallocated' and shows as its own line, so the allocated share on the dashboard says how much of the bill the rules explain. Edit, rebuild the exporter, and the whole history re-maps.",
+  "cost_centers": [
+    {"name": "data-transfer", "owner": "Stefan Coetzee", "about": "Bytes out of AWS, whichever service moved them."},
+    {"name": "compute", "owner": "Stefan Coetzee", "about": "EC2 instances, their volumes, addresses and the VPC around them."},
+    {"name": "storage-and-backup", "owner": "Stefan Coetzee", "about": "S3 and Glacier, the backup target."},
+    {"name": "domains-and-dns", "owner": "Stefan Coetzee", "about": "Domain renewals and hosted zones. Renewals post once a year as one-day spikes."},
+    {"name": "model-evals", "owner": "Stefan Coetzee", "about": "Bedrock calls from the evaluation runs."},
+    {"name": "finops-tooling", "owner": "Stefan Coetzee", "about": "What measuring the bill costs: Cost Explorer API requests."},
+    {"name": "tax", "owner": "Stefan Coetzee", "about": "VAT, posted once a month."}
+  ],
+  "rules": [
+    {"cost_center": "data-transfer", "usage_types": ["*DataTransfer*"]},
+    {"cost_center": "compute", "services": ["Amazon Elastic Compute Cloud - Compute", "EC2 - Other", "Amazon Virtual Private Cloud"]},
+    {"cost_center": "storage-and-backup", "services": ["Amazon Simple Storage Service", "Amazon Glacier", "Amazon S3 Glacier"]},
+    {"cost_center": "domains-and-dns", "services": ["Amazon Registrar", "Amazon Route 53"]},
+    {"cost_center": "model-evals", "services": ["Amazon Bedrock"]},
+    {"cost_center": "finops-tooling", "services": ["AWS Cost Explorer"]},
+    {"cost_center": "tax", "services": ["Tax"]}
+  ]
+}

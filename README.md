@@ -8,7 +8,8 @@ Six sources feed it:
 - **Ollama**, through a small metering proxy that turns each inference call into Prometheus metrics named after the OpenTelemetry GenAI conventions: time to first token, decode speed, token counts, model load time, resident models and their VRAM split.
 
 - **Website deploys**, through a small exporter that reads the GitHub Actions runs of three sites (machinebehavior.io, tychat.io, uncovertechtalent.com): every run, its steps, the conformity gate's verdict per check, and what the deploy shipped.
-- **AWS spend**, through an exporter that reads Cost Explorer and AWS Budgets: daily cost by service for this month and the three before, the month-end forecast and the monthly budget. Cost Explorer bills USD 0.01 per request, so the exporter fetches this month every 12 hours, the forecast daily and the history weekly (about USD 1 a month), caches every answer and counts its own requests. The dashboard shows real spend and stays internal.
+- **AWS spend**, through an exporter that reads Cost Explorer and AWS Budgets: daily cost by service and usage type for this month and the three before, the month-end forecast, the monthly budget and the month's cost by record type (usage, tax, credits, refunds). Cost Explorer bills USD 0.01 per request, so the exporter fetches this month every 12 hours, the forecast and the record types daily and the history weekly (about USD 1.30 a month), caches every answer and counts its own requests. The dashboard shows real spend and stays internal.
+- **FinOps: the bill**, one dashboard in the shape of a FinOps tool, fed by the same exporter, Loki and a file: AWS, the Claude Code API calls at their list price and the fixed costs entered by hand as one bill; the account's cost split into cost centers by rule (`aws-cost-exporter/allocation.json`, virtual tags, since the account carries no cost allocation tags); this month against the same days of last month; the services that moved most; per-service and per-cost-center anomalies against a 28-day median; unit costs over the business metrics the stack already has (searches, API calls, output tokens); credits and tax by record type; and how much of the bill the rules explain. `aws-cost-exporter/fixed-costs.json` holds the subscriptions and seats no API reports. Internal, like the AWS spend dashboard.
 - **Website traffic**, from the CloudFront access logs of the static sites: a shipper in [uncovertechtalent-git/site-infra](https://github.com/uncovertechtalent-git/site-infra) (`stats/cloudfront_to_loki.py`, a systemd timer every 5 minutes) writes one Loki line per request. CloudFront records no IP address, and the shipper keeps no User-Agent string and no full referrer URL: only the agent class, the bot name and the referrer host.
 - **SearXNG**, the self-hosted search engine the agents search through, by an exporter on the laptop that runs it: whether it answers, searches per minute, latency, results per query, cache hits, each engine's rate limits and blocks, and whether its proxy egress exits from the right IP.
 
@@ -197,7 +198,8 @@ grafana/build.py                 dashboards as code
 grafana/dashboards/              generated JSON, provisioned read-only
 ollama-exporter/                 the metering proxy
 deploy-exporter/                 website deploy runs from GitHub Actions
-aws-cost-exporter/               AWS spend from Cost Explorer and AWS Budgets
+aws-cost-exporter/               AWS spend from Cost Explorer and AWS Budgets; allocation.json (cost centers by rule),
+                                 fixed-costs.json (costs outside AWS, by hand), test_exporter.py (offline test)
 client/claude-code.env           Claude Code telemetry settings
 client/searxng_exporter.py       SearXNG health, pushed as OTLP from the machine that runs it
 client/searxng-exporter.plist    launchd agent for it (macOS)
