@@ -300,16 +300,31 @@ def cur_aggregate(rows):
     return {"days": days, "records": records, "tags": tags, "unit": unit or "USD", "rows": n}
 
 
+def is_missing(e):
+    """A 404 from S3: botocore's ClientError carries the code; the message is the fallback."""
+    code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+    return code in ("404", "NoSuchKey", "NotFound") or "(404)" in str(e) or "Not Found" in str(e)
+
+
+def report_rows(s3, keys):
+    """The line items of the report files, streamed: gzip and CSV are decoded as they are read."""
+    for k in keys:
+        body = s3.get_object(Bucket=CUR_BUCKET, Key=k)["Body"]
+        count("s3:GetObject")
+        raw = gzip.GzipFile(fileobj=body) if k.endswith(".gz") else io.BytesIO(body.read())
+        yield from csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8", newline=""))
+
+
 def fetch_cur(s3, now, today):
     """Read the report's billing periods whose manifest changed. The periods are the folders under
     CUR_PREFIX/CUR_REPORT/ (YYYYMMDD-YYYYMMDD); each holds <report>-Manifest.json, whose reportKeys
     name the data files of the latest delivery (both versioning modes). Periods older than
     HISTORY_MONTHS, or gone from the bucket, leave the cache."""
-    report = f"{CUR_BUCKET}/{CUR_PREFIX}/{CUR_REPORT}"
+    base = "/".join(x for x in (CUR_PREFIX, CUR_REPORT) if x) + "/"
+    report = f"{CUR_BUCKET}/{base}"
     part = cache.get("cur", {})
     if part.get("v") != CUR_VERSION or part.get("report") != report:
         part = {"v": CUR_VERSION, "report": report, "periods": {}}
-    base = f"{CUR_PREFIX}/{CUR_REPORT}/"
     keep = month_start(today, HISTORY_MONTHS).isoformat()[:7]
     periods, token = {}, None
     while True:
@@ -331,8 +346,8 @@ def fetch_cur(s3, now, today):
         key = f"{prefix}{CUR_REPORT}-Manifest.json"
         try:
             head = s3.head_object(Bucket=CUR_BUCKET, Key=key)
-        except Exception as e:  # a period folder before its first manifest; botocore's 404 is a ClientError
-            if "404" in str(e) or "Not Found" in str(e) or "NoSuchKey" in str(e):
+        except Exception as e:  # a period folder before its first manifest
+            if is_missing(e):
                 log(f"report {month}: no manifest yet at {key}")
                 continue
             raise
@@ -342,17 +357,11 @@ def fetch_cur(s3, now, today):
             continue
         manifest = json.loads(s3.get_object(Bucket=CUR_BUCKET, Key=key)["Body"].read())
         count("s3:GetObject")
-        rows = []
-        for k in manifest.get("reportKeys", []):
-            body = s3.get_object(Bucket=CUR_BUCKET, Key=k)["Body"].read()
-            count("s3:GetObject")
-            text = gzip.decompress(body).decode() if k.endswith(".gz") else body.decode()
-            rows.extend(csv.DictReader(io.StringIO(text)))
-        agg = cur_aggregate(rows)
+        keys = manifest.get("reportKeys", [])
+        agg = cur_aggregate(report_rows(s3, keys))
         delivered = head["LastModified"].timestamp()
-        part["periods"][month] = {**agg, "etag": head["ETag"], "delivered": delivered, "fetched": now,
-                                  "keys": manifest.get("reportKeys", [])}
-        log(f"report {month}: {agg['rows']} line items in {len(agg['days'])} days from {len(manifest.get('reportKeys', []))} file(s), "
+        part["periods"][month] = {**agg, "etag": head["ETag"], "delivered": delivered, "fetched": now, "keys": keys}
+        log(f"report {month}: {agg['rows']} line items in {len(agg['days'])} days from {len(keys)} file(s), "
             f"delivered {datetime.fromtimestamp(delivered, timezone.utc).isoformat(timespec='minutes')}")
     for month in list(part["periods"]):
         if month < keep or month not in periods:
@@ -515,12 +524,14 @@ def render():
         this_month = today[:7]
         prior_month = month_start(today_d, 1).isoformat()[:7]
 
-        # Cost Explorer's days, then the report's months in their place: days (day -> service -> usage
-        # type -> cost) for both, lines (day -> service -> usage type -> resource -> cost) for the report
-        days = {**usage_rows(hist), **usage_rows(cur)}
+        # Cost Explorer's days, then the report's months in their place, both cut to the HISTORY_MONTHS
+        # window (the one-time backfill ages out): days (day -> service -> usage type -> cost) for both,
+        # lines (day -> service -> usage type -> resource -> cost) for the report
+        keep = month_start(today_d, HISTORY_MONTHS).isoformat()[:7]
+        days = {d: v for d, v in {**usage_rows(hist), **usage_rows(cur)}.items() if d[:7] >= keep}
         estimated = {d for d in set(hist.get("estimated", [])) | set(cur.get("estimated", [])) if d[:7] not in periods}
-        records = dict(cache.get("records", {}).get("months", {}))
-        lines, tags, delivered = {}, {}, {}
+        records = {mo: r for mo, r in cache.get("records", {}).get("months", {}).items() if mo >= keep}
+        lines, tags, delivered, open_days = {}, {}, {}, set()
         for month, p in periods.items():
             days = {d: v for d, v in days.items() if d[:7] != month}
             for d, row in p["days"].items():
@@ -529,13 +540,12 @@ def render():
             records[month] = p.get("records", {}).get(month, {})
             tags.update(p.get("tags", {}))
             delivered[month] = p["delivered"]
-        # Cost Explorer's estimate flag is informational (it marks the whole current month); only the days a
-        # report delivery may still change leave the complete-day series
-        open_days = set()
-        if delivered:
-            cutoff = cur_cutoff(max(delivered.values())).isoformat()
-            open_days = {d for d in lines if d >= cutoff}
-            estimated |= open_days
+            # the days this period's own latest delivery may still change (a refreshed closed month says
+            # nothing about this month's cutoff)
+            open_days |= {d for d in p["days"] if d >= cur_cutoff(p["delivered"]).isoformat()}
+        # Cost Explorer's estimate flag is informational (it marks the whole current month); only the
+        # report's open days leave the complete-day series
+        estimated |= open_days
 
         # the same cost three ways: by service, by cost center, and per (service, usage type) pair
         svc = {d: {s: sum(u.values()) for s, u in row.items()} for d, row in days.items()}
@@ -561,12 +571,18 @@ def render():
             add(month_tot, d[:7], totals[d])
         mtd_svc = {s: v for (mo, s), v in months.items() if mo == this_month}
         mtd_cc = {c: v for (mo, c), v in cc_months.items() if mo == this_month}
-        mtd_usage = {}
+        mtd_usage = {}  # (service, usage type, cost center); a report day settles the center per line, as the other series do
         for d, row in days.items():
             if d[:7] == this_month:
-                for s, us in row.items():
-                    for u, v in us.items():
-                        add(mtd_usage, (s, u), v)
+                if d in lines:
+                    for s, us in lines[d].items():
+                        for u, rs in us.items():
+                            for rid, v in rs.items():
+                                add(mtd_usage, (s, u, cost_center(s, u, rid, tags.get(rid, ""))), v)
+                else:
+                    for s, us in row.items():
+                        for u, v in us.items():
+                            add(mtd_usage, (s, u, cost_center(s, u)), v)
         mtd_total = month_tot.get(this_month, 0.0)
         allocated = sum(v for c, v in mtd_cc.items() if c != UNALLOCATED)
         has_month = any(d[:7] == this_month for d in days)
@@ -586,17 +602,19 @@ def render():
                    for k in sorted(keys)]
             return [x for x in out if x[1] or x[2]]  # a key that is zero on every day (a zero-amount group) says nothing
 
-        # the forecast: Cost Explorer's from its start, or the run rate of this month's complete days
+        # the forecast: Cost Explorer's from its start, or the run rate of this month's complete days without
+        # the once-a-period services (SPIKE_EXCLUDE), whose month-to-date actuals are added once
         fc = cache.get("forecast", {})
         forecast, method = None, None
         if CUR_BUCKET:
             month_days = (next_month(today_d) - month_start(today_d)).days
-            done = [totals[d] for d in complete if d[:7] == this_month]
-            prior = [totals[d] for d in sorted(totals) if d[:7] == prior_month]
+            done = [usage[d] for d in complete if d[:7] == this_month]
+            spiked = sum(totals[d] - usage[d] for d in totals if d[:7] == this_month)
+            prior = [usage[d] for d in sorted(usage) if d[:7] == prior_month]
             if done:
-                forecast, method = sum(done) + statistics.mean(done) * (month_days - len(done)), "run_rate"
+                forecast, method = sum(done) + statistics.mean(done) * (month_days - len(done)) + spiked, "run_rate"
             elif prior:
-                forecast, method = statistics.mean(prior) * month_days, "prior_month_rate"
+                forecast, method = statistics.mean(prior) * month_days + spiked, "prior_month_rate"
         elif fc.get("amount") is not None and fc.get("start", "")[:7] == this_month:
             # the forecast covers [fc.start, month end); actual days before its start complete the month
             forecast = sum(t for d, t in totals.items() if d.startswith(this_month) and d < fc["start"]) + fc["amount"]
@@ -657,9 +675,9 @@ def render():
           [({"service": s}, round(v, 6)) for s, v in sorted(mtd_svc.items()) if abs(v) >= 1e-6])
         m("aws_cost_mtd_by_cost_center_usd", "gauge", "This month to date by cost center.",
           [({"cost_center": c}, round(v, 6)) for c, v in sorted(mtd_cc.items()) if abs(v) >= 1e-6])
-        m("aws_cost_mtd_by_usage_type_usd", "gauge", "This month to date per service and usage type.",
-          [({"service": s, "usage_type": u, "cost_center": cost_center(s, u)}, round(v, 6))
-           for (s, u), v in sorted(mtd_usage.items()) if abs(v) >= 1e-6])
+        m("aws_cost_mtd_by_usage_type_usd", "gauge", "This month to date per service, usage type and cost center.",
+          [({"service": s, "usage_type": u, "cost_center": c}, round(v, 6))
+           for (s, u, c), v in sorted(mtd_usage.items()) if abs(v) >= 1e-6])
         m("aws_cost_mtd_by_resource_usd", "gauge",
           f"This month to date per resource and cost center, the {RESOURCE_LIMIT} costliest resources of the last {RESOURCE_MONTHS} months (report mode).",
           [({"service": s, "resource_id": name, "cost_center": c}, round(v, 6))
@@ -686,7 +704,8 @@ def render():
               {c: sum(centers[d].get(c, 0.0) for d in trailing) for d2 in trailing for c in centers[d2]}.items()) if abs(v) >= 1e-6])
         m("aws_cost_month_forecast_usd", "gauge",
           "Month-end forecast: Cost Explorer's (plus the actual days before its start), or in report mode the run rate of this "
-          "month's complete days (the month before's when this month has none yet); aws_cost_forecast_info says which.",
+          "month's complete days without the SPIKE_EXCLUDE services (the month before's when this month has none yet) plus those "
+          "services' month to date; aws_cost_forecast_info says which.",
           [({}, round(forecast, 6))] if forecast is not None else [])
         m("aws_cost_forecast_info", "gauge", "The method behind aws_cost_month_forecast_usd.",
           [({"method": method}, 1)] if method else [])
@@ -777,7 +796,7 @@ def main():
             log(f"config error: {p}")
         return 2
     log(f"allocation: {len(ALLOCATION.get('rules', []))} rules; fixed costs: {len(FIXED.get('items', []))} items from {FIXED_COSTS_FILE}")
-    log(f"source: {'cost and usage report ' + CUR_PREFIX + '/' + CUR_REPORT + ' in S3, checked every ' + str(CUR_SECONDS) + ' s' if CUR_BUCKET else 'Cost Explorer'}")
+    log(f"source: {'cost and usage report ' + '/'.join(x for x in (CUR_PREFIX, CUR_REPORT) if x) + ' in S3, checked every ' + str(CUR_SECONDS) + ' s' if CUR_BUCKET else 'Cost Explorer'}")
     threading.Thread(target=poller, daemon=True).start()
     log(f"serving :{PORT}/metrics")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

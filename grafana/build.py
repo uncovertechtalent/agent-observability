@@ -1065,7 +1065,8 @@ def finops():
     """One bill in the shape of a FinOps tool (Cloudability, Finout): the AWS account from the cost
     exporter (the cost and usage report in S3, or Cost Explorer), the Claude Code API calls from Loki
     at their list price, and the fixed costs entered by hand, with the account's cost split into cost
-    centers by rule (virtual tags, since the account carries no cost allocation tags), this month
+    centers by rule (virtual tags; the cost allocation tag named in allocation.json settles a line
+    first once the account activates it), this month
     against the same days of last month, the services and cost centers that moved most, the cost per
     resource (instances, buckets, distributions: report mode only), per-service and per-resource
     anomalies, unit costs over the business metrics the stack already has, credits and tax by record
@@ -1119,11 +1120,12 @@ def finops():
                 "options": {"showHeader": True, "footer": {"show": True, "reducer": ["sum"], "fields": ""}}}
 
     def anomaly_table(title, metric_prefix, label, description):
-        """Latest day, 28-day median and their ratio per `label`. The ratio is PromQL, with the median
-        floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with no median (first seen
-        on the latest day) has an empty ratio cell rather than infinity."""
-        a = f"max by ({label}) ({metric_prefix}_latest_day_usd)"
-        b = f"max by ({label}) ({metric_prefix}_median_day_usd)"
+        """Latest day, 28-day median and their ratio per `label` (one name or several). The ratio is
+        PromQL, with the median floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with
+        no median (first seen on the latest day) has an empty ratio cell rather than infinity."""
+        by = ", ".join((label,) if isinstance(label, str) else label)
+        a = f"max by ({by}) ({metric_prefix}_latest_day_usd)"
+        b = f"max by ({by}) ({metric_prefix}_median_day_usd)"
         return {"type": "table", "title": title, "datasource": PROM,
                 "description": description + f" Medians under USD {ANOMALY_FLOOR_USD:.2f} count as {ANOMALY_FLOOR_USD:.2f} in the ratio; "
                                              "a line first seen on the latest day has no ratio.",
@@ -1204,9 +1206,10 @@ def finops():
                      "in compute, its bytes out in data-transfer). '(none)' is the lines without a resource: tax, API requests. "
                      "The data row counts the resources and sums the ones beyond the list. Empty until the report's first delivery.",
                      limit=12), 8, 10),
-        L.place(pivot_bars("Daily spend by resource", "aws_cost_day_by_resource_usd", "day", "resource_id",
-                           "Per UTC day, the costliest resources of this month and last. Empty until the report's first delivery."), 8, 10),
-        L.place(anomaly_table("Resources, latest day against their 28-day median", "aws_cost_resource", "resource_id",
+        L.place(pivot_bars("Daily spend by resource", "sum by (day, resource_id) (aws_cost_day_by_resource_usd)", "day", "resource_id",
+                           "Per UTC day, the costliest resources of this month and last, a resource's services added up (an instance's "
+                           "hours and its bytes out). Empty until the report's first delivery."), 8, 10),
+        L.place(anomaly_table("Resources, latest day against their 28-day median", "aws_cost_resource", ("service", "resource_id"),
                               "The latest complete UTC day per resource against the median of the 28 days before it, zero-filled. "
                               "Orange from 1.5, red from 2. A new instance shows here first."), 8, 10),
 

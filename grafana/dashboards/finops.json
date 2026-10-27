@@ -968,7 +968,7 @@
     {
       "type": "barchart",
       "title": "Daily spend by resource",
-      "description": "Per UTC day, the costliest resources of this month and last. Empty until the report's first delivery.",
+      "description": "Per UTC day, the costliest resources of this month and last, a resource's services added up (an instance's hours and its bytes out). Empty until the report's first delivery.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -979,7 +979,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aws_cost_day_by_resource_usd",
+          "expr": "sum by (day, resource_id) (aws_cost_day_by_resource_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -1054,7 +1054,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (resource_id) (aws_cost_resource_latest_day_usd)",
+          "expr": "max by (service, resource_id) (aws_cost_resource_latest_day_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -1064,7 +1064,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (resource_id) (aws_cost_resource_median_day_usd)",
+          "expr": "max by (service, resource_id) (aws_cost_resource_median_day_usd)",
           "refId": "B",
           "format": "table",
           "instant": true
@@ -1074,7 +1074,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (resource_id) (aws_cost_resource_latest_day_usd) / clamp_min(max by (resource_id) (aws_cost_resource_median_day_usd), 0.1)",
+          "expr": "max by (service, resource_id) (aws_cost_resource_latest_day_usd) / clamp_min(max by (service, resource_id) (aws_cost_resource_median_day_usd), 0.1)",
           "refId": "C",
           "format": "table",
           "instant": true
