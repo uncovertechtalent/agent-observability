@@ -1,7 +1,7 @@
 {
   "uid": "finops",
   "title": "FinOps: the bill",
-  "description": "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, record types. Internal; not shared.",
+  "description": "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, record types. Periods: AWS is the UTC calendar month to date, the Claude Code sums follow the dashboard's range in the browser's timezone, fixed costs are per month; with the default range (this month) they line up to within hours, with another range the bill adds that range's calls to this month's AWS. Internal; not shared.",
   "tags": [
     "agent-observability"
   ],
@@ -45,7 +45,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(aws_cost_mtd_usd)",
+          "expr": "max(aws_cost_mtd_usd) or vector(0)",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -71,7 +71,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range]))",
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range])) or vector(0)",
           "refId": "B",
           "queryType": "instant",
           "hide": true
@@ -801,11 +801,11 @@
     {
       "type": "table",
       "title": "Services, latest day against their 28-day median",
-      "description": "The latest complete UTC day per service against the median of the 28 days before it, days without the service counted as zero. Orange from 1.5, red from 2. Domain renewals and tax are left out.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "The latest complete UTC day per service against the median of the 28 days before it, days without the service counted as zero. Orange from 1.5, red from 2. Domain renewals and tax are left out. Medians under USD 0.10 count as 0.10 in the ratio; a line first seen on the latest day has no ratio.",
       "targets": [
         {
           "datasource": {
@@ -826,6 +826,16 @@
           "refId": "B",
           "format": "table",
           "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service) (aws_cost_service_latest_day_usd) / clamp_min(max by (service) (aws_cost_service_median_day_usd), 0.1)",
+          "refId": "C",
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -841,19 +851,8 @@
             },
             "renameByName": {
               "Value #A": "latest day",
-              "Value #B": "28-day median"
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "mode": "binary",
-            "alias": "ratio",
-            "binary": {
-              "left": "latest day",
-              "operator": "/",
-              "right": "28-day median"
+              "Value #B": "28-day median",
+              "Value #C": "ratio"
             }
           }
         },
@@ -933,11 +932,11 @@
     {
       "type": "table",
       "title": "Cost centers, latest day against their 28-day median",
-      "description": "Same test per cost center; here renewals and tax stay in, so 'domains-and-dns' and 'tax' spike by design on their day.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Same test per cost center; here renewals and tax stay in, so 'domains-and-dns' and 'tax' spike by design on their day. Medians under USD 0.10 count as 0.10 in the ratio; a line first seen on the latest day has no ratio.",
       "targets": [
         {
           "datasource": {
@@ -958,6 +957,16 @@
           "refId": "B",
           "format": "table",
           "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (cost_center) (aws_cost_cost_center_latest_day_usd) / clamp_min(max by (cost_center) (aws_cost_cost_center_median_day_usd), 0.1)",
+          "refId": "C",
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -973,19 +982,8 @@
             },
             "renameByName": {
               "Value #A": "latest day",
-              "Value #B": "28-day median"
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "mode": "binary",
-            "alias": "ratio",
-            "binary": {
-              "left": "latest day",
-              "operator": "/",
-              "right": "28-day median"
+              "Value #B": "28-day median",
+              "Value #C": "ratio"
             }
           }
         },
@@ -1153,7 +1151,7 @@
     {
       "type": "stat",
       "title": "AWS cost per 1,000 searches, 7 days",
-      "description": "Compute and data transfer of the last 7 complete UTC days over the searches of the last 7 days. Everything on the box is in the numerator, so the figure is a ceiling.",
+      "description": "Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when Cost Explorer lags, the last of them possibly still an estimate) over the searches of the 7 days ending now: the two windows are up to a day apart. Everything on the box is in the numerator, so the figure is a ceiling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1342,7 +1340,7 @@
       "title": "Savings Plans and Reserved Instances",
       "options": {
         "mode": "markdown",
-        "content": "None in the account (checked with the CLI on 2026-10-27), so every hour is on demand and a coverage gauge would read 0%. At this size a commitment buys nothing; when the compute cost center runs steady for a quarter, `GetSavingsPlansPurchaseRecommendation` is the next call to add to the exporter."
+        "content": "None in the account when this dashboard was built (the README keeps the date), so every hour is on demand and a coverage gauge would read 0%. At this size a commitment buys nothing; when the compute cost center runs steady for a quarter, `GetSavingsPlansPurchaseRecommendation` is the next call to add to the exporter."
       },
       "gridPos": {
         "x": 0,

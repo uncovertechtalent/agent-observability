@@ -920,7 +920,10 @@ def expr_sum(title, parts, description, unit=USD, decimals=2):
     """One number from several data sources: each query reduced to its last value, then added, server side.
 
     `parts` are (ref, target) pairs; the targets run hidden and the sum is the visible result.
-    An empty query counts as zero, so the sum shows while one of the sources has no data yet.
+    Each query ends in `or vector(0)`, so a source with no data in the range is a zero rather than
+    a missing operand (a reduce over an empty result returns nothing, and the math then returns
+    nothing); the reduce's replaceNN turns a NaN into zero. Checked on 2026-10-27 over a range
+    with no data in any source: the sum read 0.
     """
     targets = []
     for ref, t in parts:
@@ -1048,6 +1051,9 @@ def aws_spend():
 
 # ---------------------------------------------------------------- finops
 
+ANOMALY_FLOOR_USD = 0.1  # a median below this counts as this in the anomaly ratio, so cents do not read as spikes
+
+
 def finops():
     """One bill in the shape of a FinOps tool (Cloudability, Finout): the AWS account from the cost
     exporter, the Claude Code API calls from Loki at their list price, and the fixed costs entered by
@@ -1103,16 +1109,21 @@ def finops():
                 "options": {"showHeader": True, "footer": {"show": True, "reducer": ["sum"], "fields": ""}}}
 
     def anomaly_table(title, metric_prefix, label, description):
-        latest, med = f"{metric_prefix}_latest_day_usd", f"{metric_prefix}_median_day_usd"
-        return {"type": "table", "title": title, "description": description, "datasource": PROM,
-                "targets": [target(f"max by ({label}) ({latest})", ref="A", format="table", instant=True),
-                            target(f"max by ({label}) ({med})", ref="B", format="table", instant=True)],
+        """Latest day, 28-day median and their ratio per `label`. The ratio is PromQL, with the median
+        floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with no median (first seen
+        on the latest day) has an empty ratio cell rather than infinity."""
+        a = f"max by ({label}) ({metric_prefix}_latest_day_usd)"
+        b = f"max by ({label}) ({metric_prefix}_median_day_usd)"
+        return {"type": "table", "title": title, "datasource": PROM,
+                "description": description + f" Medians under USD {ANOMALY_FLOOR_USD:.2f} count as {ANOMALY_FLOOR_USD:.2f} in the ratio; "
+                                             "a line first seen on the latest day has no ratio.",
+                "targets": [target(a, ref="A", format="table", instant=True),
+                            target(b, ref="B", format="table", instant=True),
+                            target(f"{a} / clamp_min({b}, {ANOMALY_FLOOR_USD})", ref="C", format="table", instant=True)],
                 "transformations": [
                     {"id": "merge", "options": {}},
                     {"id": "organize", "options": {"excludeByName": {"Time": True},
-                                                   "renameByName": {"Value #A": "latest day", "Value #B": "28-day median"}}},
-                    {"id": "calculateField", "options": {"mode": "binary", "alias": "ratio",
-                                                         "binary": {"left": "latest day", "operator": "/", "right": "28-day median"}}},
+                                                   "renameByName": {"Value #A": "latest day", "Value #B": "28-day median", "Value #C": "ratio"}}},
                     {"id": "sortBy", "options": {"sort": [{"field": "ratio", "desc": True}]}}],
                 "fieldConfig": {"defaults": {"unit": USD, "decimals": 2}, "overrides": [
                     {"matcher": {"id": "byName", "options": "ratio"},
@@ -1128,8 +1139,8 @@ def finops():
     p = [
         L.row("The bill, this month"),
         L.place(expr_sum("One bill", [
-            ("A", target("max(aws_cost_mtd_usd)", instant=True, range=False)),
-            ("B", target(cc_cost, ds=LOKI, queryType="instant")),
+            ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
+            ("B", target(f"{cc_cost} or vector(0)", ds=LOKI, queryType="instant")),
             ("C", target("sum(fixed_cost_month_usd) or vector(0)", instant=True, range=False)),
         ], "AWS month to date, plus the Claude Code API calls in the dashboard's range at their list price, plus the "
            "fixed costs entered in fixed-costs.json. Added server side from the three sources."), 5, 5),
@@ -1173,8 +1184,10 @@ def finops():
 
         L.row("Unit costs"),
         L.place(instant(stat("AWS cost per 1,000 searches, 7 days", f"({compute7}) / (sum(increase(searxng_searches_total[7d])) / 1000)", USD, decimals=2,
-                             description="Compute and data transfer of the last 7 complete UTC days over the searches of the last 7 days. "
-                                         "Everything on the box is in the numerator, so the figure is a ceiling.")), 6, 5),
+                             description="Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when Cost "
+                                         "Explorer lags, the last of them possibly still an estimate) over the searches of the 7 days ending "
+                                         "now: the two windows are up to a day apart. Everything on the box is in the numerator, so the "
+                                         "figure is a ceiling.")), 6, 5),
         L.place(instant(stat("Claude Code cost per API call", f"{cc_cost} / sum(count_over_time({CC_REQUESTS} [{r}]))", USD, decimals=3, ds=LOKI,
                              description="List-price cost over the number of api_request events in the range.")), 6, 5),
         L.place(instant(stat("Claude Code cost per 1M output tokens", f"{cc_cost} / ({request_sum('output_tokens', r)} / 1e6)", USD, decimals=2, ds=LOKI,
@@ -1184,9 +1197,9 @@ def finops():
 
         L.row("Commitments"),
         L.place(text("Savings Plans and Reserved Instances",
-                     "None in the account (checked with the CLI on 2026-10-27), so every hour is on demand and a coverage gauge would "
-                     "read 0%. At this size a commitment buys nothing; when the compute cost center runs steady for a quarter, "
-                     "`GetSavingsPlansPurchaseRecommendation` is the next call to add to the exporter."), 24, 4),
+                     "None in the account when this dashboard was built (the README keeps the date), so every hour is on demand "
+                     "and a coverage gauge would read 0%. At this size a commitment buys nothing; when the compute cost center runs "
+                     "steady for a quarter, `GetSavingsPlansPurchaseRecommendation` is the next call to add to the exporter."), 24, 4),
 
         L.row("Data"),
         L.place(ratio_gauge("Allocated share", "max(aws_cost_allocated_ratio)",
@@ -1211,7 +1224,9 @@ def finops():
     return dashboard("finops", "FinOps: the bill",
                      "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list "
                      "price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, "
-                     "record types. Internal; not shared.",
+                     "record types. Periods: AWS is the UTC calendar month to date, the Claude Code sums follow the dashboard's "
+                     "range in the browser's timezone, fixed costs are per month; with the default range (this month) they line "
+                     "up to within hours, with another range the bill adds that range's calls to this month's AWS. Internal; not shared.",
                      p, refresh="15m", time_from="now/M")
 
 

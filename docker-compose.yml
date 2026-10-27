@@ -132,8 +132,11 @@ services:
       - AWS_PROFILE=${AWS_COST_PROFILE:-default}
       - AWS_SHARED_CREDENTIALS_FILE=/aws/credentials
       - AWS_CONFIG_FILE=/aws/config
+      - FIXED_COSTS_FILE=/config/fixed-costs.json
     volumes:
       - ${HOME}/.aws:/aws:ro
+      # the costs outside AWS: the committed example, or the priced git-ignored copy named in .env
+      - ${AWS_FIXED_COSTS:-./aws-cost-exporter/fixed-costs.json}:/config/fixed-costs.json:ro
       - aws_cost_exporter_data:/data
     expose: ["9202"]
     restart: unless-stopped

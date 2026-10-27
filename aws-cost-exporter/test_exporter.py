@@ -72,6 +72,13 @@ def main():
         "budgets": {"fetched": 1, "items": [{"name": "Entire budget", "type": "COST", "period": "MONTHLY", "limit": 100.0,
                                              "unit": "USD", "actual": 10.0, "forecast": 30.0}]},
     }
+    # the shipped config files pass the start-up check; a bad pair is refused with one message per problem
+    assert exporter.validate() == [], exporter.validate()
+    bad_alloc = {"cost_centers": [{"name": "a"}], "rules": [{"cost_center": "b", "services": ["x"]}, {"cost_center": "a"}]}
+    bad_fixed = {"items": [{"item": "seat", "cost_center": "zzz", "amount_usd": "12"}]}
+    problems = exporter.validate(bad_alloc, bad_fixed)
+    assert len(problems) == 4 and all("rule" in p or "item" in p for p in problems), problems
+
     metrics = parse(exporter.render())
     per_day = 1.0 + 0.5 + 0.2 + 0.1
     n_complete = today.day - 1

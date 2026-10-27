@@ -6,3 +6,4 @@ alertmanager/data/
 alert-issues/secrets/
 prometheus/secrets/
 pager/secrets/
+aws-cost-exporter/fixed-costs.local.json

@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 RUN pip install --no-cache-dir boto3==1.35.0
 WORKDIR /app
-COPY exporter.py allocation.json fixed-costs.json .
+# allocation.json is in the image; fixed-costs.json (amounts) is mounted by compose, see FIXED_COSTS_FILE
+COPY exporter.py allocation.json .
 # Runs as the host user that owns ~/.aws (mode 600), so the read-only mount is readable.
 # /data holds the response cache; a new named volume takes this ownership.
 ARG UID=1000

@@ -18,7 +18,10 @@ aws_cost_explorer_spend_usd_total shows what the exporter itself has cost.
 Virtual tags: the account carries no cost allocation tags, so allocation.json maps every
 (service, usage type) pair to a cost center by rule, the way a FinOps tool's virtual tags do;
 a pair no rule matches is "unallocated". fixed-costs.json lists monthly costs outside AWS
-(subscriptions, seats) entered by hand. Both files are read once, at start.
+(subscriptions, seats) entered by hand; the committed file is the example with no amounts, and
+compose mounts the priced copy (fixed-costs.local.json, git-ignored) at FIXED_COSTS_FILE when
+there is one. Both files are read once, at start, and checked: a rule or an item that names a
+cost center the allocation file does not list stops the exporter with a message.
 
 Credentials come from the host's AWS shared config, mounted read-only (AWS_PROFILE picks
 the profile). The metrics carry real spend: the dashboards are internal and never shared.
@@ -92,6 +95,33 @@ def cost_center(service, usage_type):
             break
         _centers[key] = found
     return _centers[key]
+
+
+def validate(allocation=None, fixed=None):
+    """Problems in the two config files: a rule or an item that names no cost center or one the
+    allocation file does not list, a rule that would match everything, an amount that is not a number.
+    The exporter refuses to start on any of them, so a typo cannot make a phantom cost center."""
+    allocation = ALLOCATION if allocation is None else allocation
+    fixed = FIXED if fixed is None else fixed
+    known = {c.get("name") for c in allocation.get("cost_centers", [])}
+    problems = []
+    for i, rule in enumerate(allocation.get("rules", []), 1):
+        c = rule.get("cost_center")
+        if not c:
+            problems.append(f"allocation.json rule {i} has no cost_center")
+        elif c not in known:
+            problems.append(f"allocation.json rule {i} names cost center {c!r}, which cost_centers does not list")
+        if not rule.get("services") and not rule.get("usage_types"):
+            problems.append(f"allocation.json rule {i} has neither services nor usage_types and would match everything")
+    for i, item in enumerate(fixed.get("items", []), 1):
+        if not item.get("item"):
+            problems.append(f"fixed-costs.json item {i} has no name")
+        if item.get("cost_center") not in known:
+            problems.append(f"fixed-costs.json item {i} names cost center {item.get('cost_center')!r}, which allocation.json does not list")
+        amount = item.get("amount_usd")
+        if amount is not None and not isinstance(amount, (int, float)):
+            problems.append(f"fixed-costs.json item {i}: amount_usd must be a number or null, not {amount!r}")
+    return problems
 
 
 def count(api, n=1):
@@ -465,7 +495,12 @@ def main():
         log(f"cache loaded, requests so far {cache['requests']}")
     except FileNotFoundError:
         log("no cache yet")
-    log(f"allocation: {len(ALLOCATION.get('rules', []))} rules; fixed costs: {len(FIXED.get('items', []))} items")
+    problems = validate()
+    if problems:
+        for p in problems:
+            log(f"config error: {p}")
+        return 2
+    log(f"allocation: {len(ALLOCATION.get('rules', []))} rules; fixed costs: {len(FIXED.get('items', []))} items from {FIXED_COSTS_FILE}")
     threading.Thread(target=poller, daemon=True).start()
     log(f"serving :{PORT}/metrics")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
