@@ -877,6 +877,66 @@ def searxng_public():
 
 
 
+USD = "currencyUSD"
+MIXED = {"type": "datasource", "uid": "-- Mixed --"}
+EXPR = {"type": "__expr__", "uid": "__expr__"}
+
+
+def ratio_gauge(title, expr, description, steps=((None, "green"), (0.8, "orange"), (1, "red")), max_=1.2):
+    return {"type": "gauge", "title": title, "description": description, "datasource": PROM,
+            "targets": [target(expr)],
+            "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 0, "min": 0, "max": max_,
+                                         "thresholds": {"mode": "absolute", "steps": [
+                                             {"color": c, "value": v} for v, c in steps]}}, "overrides": []},
+            "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdMarkers": True}}
+
+
+def pivot_bars(title, expr, row, col, description, stack=True):
+    """Instant series with `row` and `col` labels (a day and a service, say) as stacked bars per row value."""
+    t = target(expr, format="table", instant=True)
+    return {"type": "barchart", "title": title, "description": description, "datasource": PROM, "targets": [t],
+            "transformations": [
+                {"id": "groupingToMatrix", "options": {"columnField": col, "rowField": row, "valueField": "Value",
+                                                       "emptyValue": "zero"}},
+                {"id": "sortBy", "options": {"sort": [{"field": f"{row}\\{col}"}]}}],
+            "fieldConfig": {"defaults": {"unit": USD, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
+            "options": {"xField": f"{row}\\{col}", "stacking": "normal" if stack else "none", "xTickLabelRotation": -45,
+                        "xTickLabelSpacing": 100, "legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
+                        "tooltip": {"mode": "multi"}}}
+
+
+def instant(panel):
+    """Current-value panel: read the latest sample, no sparkline, no colour on amounts."""
+    for t in panel["targets"]:
+        if t.get("datasource") == PROM:
+            t.update({"instant": True, "range": False})
+    if panel["type"] == "stat":
+        panel["options"]["graphMode"] = "none"
+        panel["options"].setdefault("colorMode", "none")
+    return panel
+
+
+def expr_sum(title, parts, description, unit=USD, decimals=2):
+    """One number from several data sources: each query reduced to its last value, then added, server side.
+
+    `parts` are (ref, target) pairs; the targets run hidden and the sum is the visible result.
+    Each query ends in `or vector(0)`, so a source with no data in the range is a zero rather than
+    a missing operand (a reduce over an empty result returns nothing, and the math then returns
+    nothing); the reduce's replaceNN turns a NaN into zero. Checked on 2026-10-27 over a range
+    with no data in any source: the sum read 0.
+    """
+    targets = []
+    for ref, t in parts:
+        targets.append({**t, "refId": ref, "hide": True})
+        targets.append({"datasource": EXPR, "refId": "R" + ref, "type": "reduce", "expression": ref, "reducer": "last",
+                        "settings": {"mode": "replaceNN", "replaceWithValue": 0}, "hide": True})
+    targets.append({"datasource": EXPR, "refId": "SUM", "type": "math",
+                    "expression": " + ".join(f"$R{ref}" for ref, _ in parts)})
+    return {"type": "stat", "title": title, "description": description, "datasource": MIXED, "targets": targets,
+            "fieldConfig": {"defaults": {"unit": unit, "decimals": decimals}, "overrides": []},
+            "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "none", "graphMode": "none"}}
+
+
 def aws_spend():
     """AWS account spend from Cost Explorer and AWS Budgets (aws-cost-exporter).
 
@@ -888,27 +948,6 @@ def aws_spend():
     L = Layout()
     usd = "currencyUSD"
     budget = 'max(aws_budget_limit_usd{period="MONTHLY"})'
-
-    def ratio_gauge(title, expr, description):
-        return {"type": "gauge", "title": title, "description": description, "datasource": PROM,
-                "targets": [target(expr)],
-                "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 0, "min": 0, "max": 1.2,
-                                             "thresholds": {"mode": "absolute", "steps": [
-                                                 {"color": "green", "value": None}, {"color": "orange", "value": 0.8},
-                                                 {"color": "red", "value": 1}]}}, "overrides": []},
-                "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdMarkers": True}}
-
-    def pivot_bars(title, expr, row, col, description, stack=True):
-        t = target(expr, format="table", instant=True)
-        return {"type": "barchart", "title": title, "description": description, "datasource": PROM, "targets": [t],
-                "transformations": [
-                    {"id": "groupingToMatrix", "options": {"columnField": col, "rowField": row, "valueField": "Value",
-                                                           "emptyValue": "zero"}},
-                    {"id": "sortBy", "options": {"sort": [{"field": f"{row}\\{col}"}]}}],
-                "fieldConfig": {"defaults": {"unit": usd, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
-                "options": {"xField": f"{row}\\{col}", "stacking": "normal" if stack else "none", "xTickLabelRotation": -45,
-                            "xTickLabelSpacing": 100, "legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
-                            "tooltip": {"mode": "multi"}}}
 
     p = [
         L.row("This month"),
@@ -1010,6 +1049,203 @@ def aws_spend():
                      p, refresh="15m", time_from="now-30d")
 
 
+# ---------------------------------------------------------------- finops
+
+ANOMALY_FLOOR_USD = 0.1  # a median below this counts as this in the anomaly ratio, so cents do not read as spikes
+
+
+def finops():
+    """One bill in the shape of a FinOps tool (Cloudability, Finout): the AWS account from the cost
+    exporter, the Claude Code API calls from Loki at their list price, and the fixed costs entered by
+    hand, with the account's cost split into cost centers by rule (virtual tags, since the account
+    carries no cost allocation tags), this month against the same days of last month, the services
+    and cost centers that moved most, per-service anomalies, unit costs over the business metrics the
+    stack already has, credits and tax by record type, and how much of the bill the rules explain.
+
+    Internal: the panels show real spend and are never shared. The default range is this month to
+    date, which the Claude Code sums follow; the AWS figures are instant series with day, month and
+    cost center labels, so they do not move with the range. Prometheus keeps 90 days.
+    """
+    L = Layout()
+    r = "$__range"
+    budget = 'max(aws_budget_limit_usd{period="MONTHLY"})'
+    this_td = 'max(aws_cost_to_date_usd{period="this_month"})'
+    prior_td = 'max(aws_cost_to_date_usd{period="prior_month"})'
+    cc_cost = request_sum("cost_usd", r)
+    compute7 = ('(sum(aws_cost_trailing_by_cost_center_usd{cost_center="compute"}) or vector(0)) '
+                '+ (sum(aws_cost_trailing_by_cost_center_usd{cost_center="data-transfer"}) or vector(0))')
+
+    def movers(metric, label):
+        """Signed change per `label` against the same days of last month; a key on one side only counts in full."""
+        this = f'sum by ({label}) ({metric}{{period="this_month"}})'
+        prior = f'sum by ({label}) ({metric}{{period="prior_month"}})'
+        return f"((({this}) or ({prior}) * 0) - (({prior}) or ({this}) * 0))"
+
+    def bars(title, expr, legend, description, limit=10):
+        return {"type": "bargauge", "title": title, "datasource": PROM, "description": description,
+                "targets": [target(f"sort_desc(topk({limit}, {expr}))", legend, instant=True)],
+                "fieldConfig": {"defaults": {"unit": USD, "decimals": 2, "min": 0}, "overrides": []},
+                "options": {"orientation": "horizontal", "displayMode": "basic", "showUnfilled": True,
+                            "reduceOptions": {"calcs": ["lastNotNull"]}}}
+
+    def compare_table(title, metric, label, description):
+        """This month to date, the same days of last month and the change, one row per `label`."""
+        this = f'max by ({label}) ({metric}{{period="this_month"}})'
+        prior = f'max by ({label}) ({metric}{{period="prior_month"}})'
+        return {"type": "table", "title": title, "description": description, "datasource": PROM,
+                "targets": [target(this, ref="A", format="table", instant=True),
+                            target(prior, ref="B", format="table", instant=True)],
+                "transformations": [
+                    {"id": "merge", "options": {}},
+                    {"id": "organize", "options": {"excludeByName": {"Time": True},
+                                                   "renameByName": {"Value #A": "this month to date", "Value #B": "last month, same days"}}},
+                    {"id": "calculateField", "options": {"mode": "binary", "alias": "change",
+                                                         "binary": {"left": "this month to date", "operator": "-", "right": "last month, same days"}}},
+                    {"id": "sortBy", "options": {"sort": [{"field": "this month to date", "desc": True}]}}],
+                "fieldConfig": {"defaults": {"unit": USD, "decimals": 2}, "overrides": [
+                    {"matcher": {"id": "byName", "options": "change"},
+                     "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                                    {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                                        {"color": "green", "value": None}, {"color": "text", "value": 0}, {"color": "red", "value": 1}]}}]}]},
+                "options": {"showHeader": True, "footer": {"show": True, "reducer": ["sum"], "fields": ""}}}
+
+    def anomaly_table(title, metric_prefix, label, description):
+        """Latest day, 28-day median and their ratio per `label`. The ratio is PromQL, with the median
+        floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with no median (first seen
+        on the latest day) has an empty ratio cell rather than infinity."""
+        a = f"max by ({label}) ({metric_prefix}_latest_day_usd)"
+        b = f"max by ({label}) ({metric_prefix}_median_day_usd)"
+        return {"type": "table", "title": title, "datasource": PROM,
+                "description": description + f" Medians under USD {ANOMALY_FLOOR_USD:.2f} count as {ANOMALY_FLOOR_USD:.2f} in the ratio; "
+                                             "a line first seen on the latest day has no ratio.",
+                "targets": [target(a, ref="A", format="table", instant=True),
+                            target(b, ref="B", format="table", instant=True),
+                            target(f"{a} / clamp_min({b}, {ANOMALY_FLOOR_USD})", ref="C", format="table", instant=True)],
+                "transformations": [
+                    {"id": "merge", "options": {}},
+                    {"id": "organize", "options": {"excludeByName": {"Time": True},
+                                                   "renameByName": {"Value #A": "latest day", "Value #B": "28-day median", "Value #C": "ratio"}}},
+                    {"id": "sortBy", "options": {"sort": [{"field": "ratio", "desc": True}]}}],
+                "fieldConfig": {"defaults": {"unit": USD, "decimals": 2}, "overrides": [
+                    {"matcher": {"id": "byName", "options": "ratio"},
+                     "properties": [{"id": "unit", "value": "none"}, {"id": "decimals", "value": 2},
+                                    {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+                                    {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                                        {"color": "transparent", "value": None}, {"color": "orange", "value": 1.5}, {"color": "red", "value": 2}]}}]}]},
+                "options": {"showHeader": True}}
+
+    def text(title, md):
+        return {"type": "text", "title": title, "options": {"mode": "markdown", "content": md}}
+
+    latest_day = {"type": "stat", "title": "Latest complete day", "datasource": PROM,
+                  "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day Cost Explorer has.",
+                  "targets": [target("max by (day) (aws_cost_latest_day_info)", "{{day}}", instant=True, range=False)],
+                  "fieldConfig": {"defaults": {}, "overrides": []},
+                  "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "name", "colorMode": "none", "graphMode": "none"}}
+
+    p = [
+        L.row("The bill, this month"),
+        L.place(expr_sum("One bill", [
+            ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
+            ("B", target(f"{cc_cost} or vector(0)", ds=LOKI, queryType="instant")),
+            ("C", target("sum(fixed_cost_month_usd) or vector(0)", instant=True, range=False)),
+        ], "AWS month to date, plus the Claude Code API calls in the dashboard's range at their list price, plus the "
+           "fixed costs entered in fixed-costs.json. Added server side from the three sources."), 5, 5),
+        L.place(instant(stat("AWS, month to date", "max(aws_cost_mtd_usd)", USD, decimals=2,
+                             description="Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day.")), 4, 5),
+        L.place(instant(stat("Claude Code API calls, list price", cc_cost, USD, decimals=2, ds=LOKI,
+                             description="What the API calls in the range would cost at list price, from Claude Code's own api_request "
+                                         "events. The subscription covers them; the amount is what the subscription is worth this month.")), 5, 5),
+        L.place(instant(stat("Fixed costs entered", "sum(fixed_cost_month_usd) or vector(0)", USD, decimals=2,
+                             description="Monthly subscriptions and seats from fixed-costs.json. Items without a price are counted on the data row below and left out here.")), 4, 5),
+        L.place(instant(stat("AWS vs last month, same days", f"({this_td} - {prior_td}) / {prior_td}", "percentunit", decimals=0,
+                             description="Complete days 1 to N of this month against days 1 to N of last month (N on the data row). "
+                                         "Positive is up. A domain renewal or the monthly tax in one window and not the other shows here.")), 3, 5),
+        L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
+                            "Cost Explorer's month-end forecast against the MONTHLY budget in AWS Budgets. Red above 100%."), 3, 5),
+
+        L.row("Cost centers (virtual tags)"),
+        L.place(pivot_bars("Daily spend by cost center", "aws_cost_day_by_cost_center_usd", "day", "cost_center",
+                           "Every (service, usage type) pair mapped to a cost center by the rules in allocation.json; "
+                           "'unallocated' is what no rule explains. This month and the three months before."), 24, 10),
+        L.place(compare_table("Cost centers, this month against last", "aws_cost_to_date_by_cost_center_usd", "cost_center",
+                              "Complete days 1 to N of each month. The footer sums the columns."), 12, 9),
+        L.place(bars("Top rises, by service", f"{movers('aws_cost_to_date_by_service_usd', 'service')} > 0", "{{service}}",
+                     "Services that cost more than on the same days of last month, largest rise first. "
+                     "A service on one side only counts in full.", limit=8), 6, 9),
+        L.place(bars("Top falls, by service", f"(0 - {movers('aws_cost_to_date_by_service_usd', 'service')}) > 0", "{{service}}",
+                     "Services that cost less than on the same days of last month, largest fall first, shown as the amount saved.", limit=8), 6, 9),
+
+        L.row("Where the money goes"),
+        L.place(bars("Top usage types this month", "aws_cost_mtd_by_usage_type_usd", "{{service}}: {{usage_type}}",
+                     "Month to date per usage type, the finest grain Cost Explorer gives without a usage report. "
+                     "A usage type names the region, the instance size or the storage class.", limit=12), 8, 10),
+        L.place(pivot_bars("Months by cost center", "aws_cost_month_by_cost_center_usd", "month", "cost_center",
+                           "Calendar months by cost center; the current month is to date."), 8, 10),
+        L.place(pivot_bars("Months by record type", "aws_cost_month_record_usd", "month", "record_type",
+                           "Usage, tax, credits and refunds per calendar month. Credits and refunds post as negative amounts."), 8, 10),
+
+        L.row("Anomalies"),
+        L.place(anomaly_table("Services, latest day against their 28-day median", "aws_cost_service", "service",
+                              "The latest complete UTC day per service against the median of the 28 days before it, days without "
+                              "the service counted as zero. Orange from 1.5, red from 2. Domain renewals and tax are left out."), 12, 9),
+        L.place(anomaly_table("Cost centers, latest day against their 28-day median", "aws_cost_cost_center", "cost_center",
+                              "Same test per cost center; here renewals and tax stay in, so 'domains-and-dns' and 'tax' spike by design on their day."), 12, 9),
+        L.place(pivot_bars("Daily total", "aws_cost_day_total_usd", "day", "estimated",
+                           "All services per UTC day; the 'true' column is the days Cost Explorer still marks as estimated."), 24, 8),
+
+        L.row("Unit costs"),
+        L.place(instant(stat("AWS cost per 1,000 searches, 7 days", f"({compute7}) / (sum(increase(searxng_searches_total[7d])) / 1000)", USD, decimals=2,
+                             description="Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when Cost "
+                                         "Explorer lags, the last of them possibly still an estimate) over the searches of the 7 days ending "
+                                         "now: the two windows are up to a day apart. Everything on the box is in the numerator, so the "
+                                         "figure is a ceiling.")), 6, 5),
+        L.place(instant(stat("Claude Code cost per API call", f"{cc_cost} / sum(count_over_time({CC_REQUESTS} [{r}]))", USD, decimals=3, ds=LOKI,
+                             description="List-price cost over the number of api_request events in the range.")), 6, 5),
+        L.place(instant(stat("Claude Code cost per 1M output tokens", f"{cc_cost} / ({request_sum('output_tokens', r)} / 1e6)", USD, decimals=2, ds=LOKI,
+                             description="List-price cost over output tokens in the range, all models together; it moves with the model mix.")), 6, 5),
+        L.place(instant(stat("Searches, 7 days", "sum(increase(searxng_searches_total[7d]))", "short", decimals=0,
+                             description="The denominator of the search unit cost.")), 6, 5),
+
+        L.row("Commitments"),
+        L.place(text("Savings Plans and Reserved Instances",
+                     "None in the account when this dashboard was built (the README keeps the date), so every hour is on demand "
+                     "and a coverage gauge would read 0%. At this size a commitment buys nothing; when the compute cost center runs "
+                     "steady for a quarter, `GetSavingsPlansPurchaseRecommendation` is the next call to add to the exporter."), 24, 4),
+
+        L.row("Data"),
+        L.place(ratio_gauge("Allocated share", "max(aws_cost_allocated_ratio)",
+                            "Share of this month's AWS cost that a rule in allocation.json maps to a cost center. The rest is 'unallocated'.",
+                            steps=((None, "red"), (0.9, "orange"), (0.99, "green")), max_=1), 4, 5),
+        L.place(instant(stat("Days compared", "max(aws_cost_to_date_days)", "short", decimals=0,
+                             description="N in the this-month-against-last panels: complete days of this month so far, capped at the "
+                                         "length of last month (28 or 29 at the end of March).")), 3, 5),
+        L.place(latest_day, 4, 5),
+        L.place(instant(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
+                             description="Time since the exporter last asked Cost Explorer for this month (every 12 h).")), 3, 5),
+        L.place(instant(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no",
+                             description="Cost Explorer marks recent days as estimates until it settles them.")), 3, 5),
+        L.place(instant(stat("Fixed-cost items without a price", 'max(fixed_cost_items{state="unpriced"})', "short", decimals=0,
+                             description="Items in the mounted fixed-costs file with amount_usd null. Enter the price and restart the exporter.")), 4, 5),
+        L.place(instant(stat("Cost of measuring", "max(aws_cost_explorer_spend_usd_total)", USD, decimals=2,
+                             description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.")), 3, 5),
+    ]
+    for panel in p:
+        if panel["type"] == "stat" and panel["title"] in ("Data age", "Fixed-cost items without a price"):
+            panel["options"]["colorMode"] = "value"
+            panel["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+                {"color": "green", "value": None}, {"color": "orange", "value": 13 * 3600 if panel["title"] == "Data age" else 1}]}
+    return dashboard("finops", "FinOps: the bill",
+                     "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list "
+                     "price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, "
+                     "record types. Periods: AWS is the UTC calendar month to date, the Claude Code sums follow the dashboard's "
+                     "range in the browser's timezone, fixed costs are per month; with the default range (this month) they line "
+                     "up to within hours, with another range the bill adds that range's calls to this month's AWS. Internal; not shared.",
+                     p, refresh="15m", time_from="now/M")
+
+
+# ---------------------------------------------------------------- site traffic
+
 def site_traffic(public=False):
     """Site traffic from the CloudFront access logs of the static sites (repo site-infra).
 
@@ -1100,7 +1336,7 @@ def site_traffic(public=False):
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), site_traffic(), site_traffic(public=True)):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), site_traffic(), site_traffic(public=True)):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

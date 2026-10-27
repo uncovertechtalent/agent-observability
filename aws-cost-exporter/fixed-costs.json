@@ -1,0 +1,9 @@
+{
+  "about": "Monthly costs outside AWS, entered by hand: subscriptions and seats that no API reports. This committed file is the example and carries no amounts. The priced copy lives beside it as fixed-costs.local.json, git-ignored; compose mounts it when AWS_FIXED_COSTS in .env points at it, and the exporter reads whatever FIXED_COSTS_FILE names. An item with amount_usd null is known but not priced; the exporter counts it as unpriced and leaves it off the bill. Amounts are what the invoice says, in USD; an invoice in another currency is converted by hand and the rate noted in 'about'. Every cost_center must be one of allocation.json's cost_centers.",
+  "items": [
+    {"item": "Claude subscription", "provider": "Anthropic", "cost_center": "agents", "amount_usd": null,
+     "about": "Covers the Claude Code API calls, which the bill shows at their list-price equivalent."},
+    {"item": "GitHub", "provider": "GitHub", "cost_center": "sites", "amount_usd": null,
+     "about": "Organisation seats and Actions minutes beyond the free tier, if any."}
+  ]
+}
