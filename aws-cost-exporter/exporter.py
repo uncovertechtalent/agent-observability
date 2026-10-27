@@ -529,9 +529,13 @@ def render():
             records[month] = p.get("records", {}).get(month, {})
             tags.update(p.get("tags", {}))
             delivered[month] = p["delivered"]
+        # Cost Explorer's estimate flag is informational (it marks the whole current month); only the days a
+        # report delivery may still change leave the complete-day series
+        open_days = set()
         if delivered:
             cutoff = cur_cutoff(max(delivered.values())).isoformat()
-            estimated |= {d for d in lines if d >= cutoff}
+            open_days = {d for d in lines if d >= cutoff}
+            estimated |= open_days
 
         # the same cost three ways: by service, by cost center, and per (service, usage type) pair
         svc = {d: {s: sum(u.values()) for s, u in row.items()} for d, row in days.items()}
@@ -569,7 +573,7 @@ def render():
 
         # the spike baseline: complete days, without the once-a-period services
         usage = {d: sum(v for s, v in row.items() if s not in SPIKE_EXCLUDE) for d, row in svc.items()}
-        complete = sorted(d for d in usage if d < today and d not in estimated)
+        complete = sorted(d for d in usage if d < today and d not in open_days)
         latest = complete[-1] if complete else None
         baseline_days = complete[-1 - MEDIAN_DAYS:-1]
         window = [usage[d] for d in baseline_days]
@@ -688,7 +692,8 @@ def render():
           [({"method": method}, 1)] if method else [])
         m("aws_cost_latest_day_usd", "gauge", "Cost of the latest complete UTC day without SPIKE_EXCLUDE services.",
           [({}, round(usage[latest], 6))] if latest else [])
-        m("aws_cost_latest_day_estimated", "gauge", "1 when the latest day is marked estimated (Cost Explorer mode; a report-mode latest day is complete by definition).",
+        m("aws_cost_latest_day_estimated", "gauge", "1 when Cost Explorer still marks the latest complete day as an estimate (it marks the whole current month); "
+          "a day the report's latest delivery may still change is never the latest complete day.",
           [({}, int(latest in estimated))] if latest else [])
         m("aws_cost_latest_day_info", "gauge", "The latest complete UTC day the anomaly series describe.",
           [({"day": latest}, 1)] if latest else [])

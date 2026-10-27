@@ -77,7 +77,8 @@ def build_cache(today):
     return {
         "requests": {"ce:GetCostAndUsage": 10},
         "errors": 0,
-        "current": {"v": 2, "month": day(this_month), "fetched": 1, "days": cur_days, "estimated": [day(today)], "unit": "USD"},
+        # Cost Explorer marks every day of the current month as estimated
+        "current": {"v": 2, "month": day(this_month), "fetched": 1, "days": cur_days, "estimated": sorted(cur_days), "unit": "USD"},
         "history": {"v": 2, "start": day(prior_month), "end": day(this_month), "fetched": 1, "days": hist_days, "estimated": [], "unit": "USD"},
         "records": {"start": day(prior_month), "fetched": 1, "months": {day(prior_month)[:7]: {"Usage": 50.0, "Tax": 9.5}}},
         "forecast": {"fetched": 1, "amount": 20.0, "start": day(today), "end": day(exporter.next_month(today))},
@@ -212,8 +213,11 @@ def main():
     assert abs(get(metrics, "aws_cost_to_date_usd", period="prior_month") - (PER_DAY * n + 12.0)) < 1e-6
     assert abs(get(metrics, "aws_cost_to_date_by_cost_center_usd", period="prior_month", cost_center="compute") - 1.0 * n) < 1e-6
 
-    # anomalies per service and per cost center: flat series, so latest equals the median
+    # anomalies per service and per cost center: flat series, so latest equals the median; Cost Explorer's
+    # estimate flag on the whole month does not push the latest complete day back into September
     assert get(metrics, "aws_cost_latest_day_info", day="2026-10-26") == 1
+    assert get(metrics, "aws_cost_latest_day_estimated") == 1
+    assert get(metrics, "aws_cost_day_total_usd", day="2026-10-26", estimated="true") == PER_DAY
     assert get(metrics, "aws_cost_service_latest_day_usd", service="EC2 - Other") == 0.5
     assert get(metrics, "aws_cost_service_median_day_usd", service="EC2 - Other") == 0.5
     assert ("aws_cost_service_latest_day_usd", (("service", "Amazon Registrar"),)) not in metrics  # SPIKE_EXCLUDE
@@ -362,6 +366,13 @@ def main():
     exporter.cache["cur"]["fetched"] = 1e12  # not due
     exporter.fetch(CE(), Budgets(), "123", s3)
     assert calls == ["SERVICE:2026-10-01"], calls
+    # and the month Cost Explorer filled in reads as in Cost Explorer mode: the latest complete day is yesterday
+    exporter.cache = {**build_cache(today), "cur": {"v": 1, "report": "x", "periods": {}, "fetched": 1.0}}
+    gap = parse(exporter.render())
+    assert get(gap, "aws_cost_source_info", source="cur") == 1
+    assert get(gap, "aws_cost_latest_day_info", day="2026-10-26") == 1
+    assert get(gap, "aws_cost_forecast_info", method="run_rate") == 1
+    assert abs(get(gap, "aws_cost_month_forecast_usd") - (PER_DAY * 26 + PER_DAY * 5)) < 1e-6
     exporter.CUR_BUCKET = ""
     print(f"ok: {ce_samples} samples, {ce_metrics} metrics in Cost Explorer mode; {len(r)} samples, {len({k[0] for k in r})} metrics in report mode")
 
