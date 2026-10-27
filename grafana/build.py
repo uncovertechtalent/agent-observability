@@ -1076,9 +1076,10 @@ def finops():
                 '+ (sum(aws_cost_trailing_by_cost_center_usd{cost_center="data-transfer"}) or vector(0))')
 
     def movers(metric, label):
+        """Signed change per `label` against the same days of last month; a key on one side only counts in full."""
         this = f'sum by ({label}) ({metric}{{period="this_month"}})'
         prior = f'sum by ({label}) ({metric}{{period="prior_month"}})'
-        return f"sort_desc((({this}) or ({prior}) * 0) - (({prior}) or ({this}) * 0))"
+        return f"((({this}) or ({prior}) * 0) - (({prior}) or ({this}) * 0))"
 
     def bars(title, expr, legend, description, limit=10):
         return {"type": "bargauge", "title": title, "datasource": PROM, "description": description,
@@ -1136,6 +1137,12 @@ def finops():
     def text(title, md):
         return {"type": "text", "title": title, "options": {"mode": "markdown", "content": md}}
 
+    latest_day = {"type": "stat", "title": "Latest complete day", "datasource": PROM,
+                  "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day Cost Explorer has.",
+                  "targets": [target("max by (day) (aws_cost_latest_day_info)", "{{day}}", instant=True, range=False)],
+                  "fieldConfig": {"defaults": {}, "overrides": []},
+                  "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "name", "colorMode": "none", "graphMode": "none"}}
+
     p = [
         L.row("The bill, this month"),
         L.place(expr_sum("One bill", [
@@ -1163,15 +1170,20 @@ def finops():
                            "'unallocated' is what no rule explains. This month and the three months before."), 24, 10),
         L.place(compare_table("Cost centers, this month against last", "aws_cost_to_date_by_cost_center_usd", "cost_center",
                               "Complete days 1 to N of each month. The footer sums the columns."), 12, 9),
-        L.place(bars("Top movers, by service", movers("aws_cost_to_date_by_service_usd", "service"), "{{service}}",
-                     "Change against the same days of last month, largest increase first. A service that appears on one side only counts in full."), 12, 9),
+        L.place(bars("Top rises, by service", f"{movers('aws_cost_to_date_by_service_usd', 'service')} > 0", "{{service}}",
+                     "Services that cost more than on the same days of last month, largest rise first. "
+                     "A service on one side only counts in full.", limit=8), 6, 9),
+        L.place(bars("Top falls, by service", f"(0 - {movers('aws_cost_to_date_by_service_usd', 'service')}) > 0", "{{service}}",
+                     "Services that cost less than on the same days of last month, largest fall first, shown as the amount saved.", limit=8), 6, 9),
 
         L.row("Where the money goes"),
         L.place(bars("Top usage types this month", "aws_cost_mtd_by_usage_type_usd", "{{service}}: {{usage_type}}",
                      "Month to date per usage type, the finest grain Cost Explorer gives without a usage report. "
-                     "A usage type names the region, the instance size or the storage class.", limit=12), 12, 10),
+                     "A usage type names the region, the instance size or the storage class.", limit=12), 8, 10),
+        L.place(pivot_bars("Months by cost center", "aws_cost_month_by_cost_center_usd", "month", "cost_center",
+                           "Calendar months by cost center; the current month is to date."), 8, 10),
         L.place(pivot_bars("Months by record type", "aws_cost_month_record_usd", "month", "record_type",
-                           "Usage, tax, credits and refunds per calendar month. Credits and refunds post as negative amounts."), 12, 10),
+                           "Usage, tax, credits and refunds per calendar month. Credits and refunds post as negative amounts."), 8, 10),
 
         L.row("Anomalies"),
         L.place(anomaly_table("Services, latest day against their 28-day median", "aws_cost_service", "service",
@@ -1206,15 +1218,17 @@ def finops():
                             "Share of this month's AWS cost that a rule in allocation.json maps to a cost center. The rest is 'unallocated'.",
                             steps=((None, "red"), (0.9, "orange"), (0.99, "green")), max_=1), 4, 5),
         L.place(instant(stat("Days compared", "max(aws_cost_to_date_days)", "short", decimals=0,
-                             description="N in the this-month-against-last panels: complete days of this month so far.")), 4, 5),
+                             description="N in the this-month-against-last panels: complete days of this month so far, capped at the "
+                                         "length of last month (28 or 29 at the end of March).")), 3, 5),
+        L.place(latest_day, 4, 5),
         L.place(instant(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
-                             description="Time since the exporter last asked Cost Explorer for this month (every 12 h).")), 4, 5),
+                             description="Time since the exporter last asked Cost Explorer for this month (every 12 h).")), 3, 5),
         L.place(instant(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no",
-                             description="Cost Explorer marks recent days as estimates until it settles them.")), 4, 5),
+                             description="Cost Explorer marks recent days as estimates until it settles them.")), 3, 5),
         L.place(instant(stat("Fixed-cost items without a price", 'max(fixed_cost_items{state="unpriced"})', "short", decimals=0,
-                             description="Items in fixed-costs.json with amount_usd null. Enter the price and rebuild the exporter.")), 4, 5),
+                             description="Items in the mounted fixed-costs file with amount_usd null. Enter the price and restart the exporter.")), 4, 5),
         L.place(instant(stat("Cost of measuring", "max(aws_cost_explorer_spend_usd_total)", USD, decimals=2,
-                             description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.")), 4, 5),
+                             description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.")), 3, 5),
     ]
     for panel in p:
         if panel["type"] == "stat" and panel["title"] in ("Data age", "Fixed-cost items without a price"):

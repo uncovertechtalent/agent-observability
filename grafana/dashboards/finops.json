@@ -607,19 +607,19 @@
     },
     {
       "type": "bargauge",
-      "title": "Top movers, by service",
+      "title": "Top rises, by service",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Change against the same days of last month, largest increase first. A service that appears on one side only counts in full.",
+      "description": "Services that cost more than on the same days of last month, largest rise first. A service on one side only counts in full.",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sort_desc(topk(10, sort_desc(((sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) * 0) - ((sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) * 0))))",
+          "expr": "sort_desc(topk(8, (((sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) * 0) - ((sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) * 0)) > 0))",
           "refId": "A",
           "legendFormat": "{{service}}",
           "instant": true
@@ -646,10 +646,56 @@
       "gridPos": {
         "x": 12,
         "y": 17,
-        "w": 12,
+        "w": 6,
         "h": 9
       },
       "id": 11
+    },
+    {
+      "type": "bargauge",
+      "title": "Top falls, by service",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Services that cost less than on the same days of last month, largest fall first, shown as the amount saved.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sort_desc(topk(8, (0 - (((sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) * 0) - ((sum by (service) (aws_cost_to_date_by_service_usd{period=\"prior_month\"})) or (sum by (service) (aws_cost_to_date_by_service_usd{period=\"this_month\"})) * 0))) > 0))",
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 17,
+        "w": 6,
+        "h": 9
+      },
+      "id": 12
     },
     {
       "type": "row",
@@ -662,7 +708,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 12
+      "id": 13
     },
     {
       "type": "bargauge",
@@ -705,10 +751,85 @@
       "gridPos": {
         "x": 0,
         "y": 27,
-        "w": 12,
+        "w": 8,
         "h": 10
       },
-      "id": 13
+      "id": 14
+    },
+    {
+      "type": "barchart",
+      "title": "Months by cost center",
+      "description": "Calendar months by cost center; the current month is to date.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "aws_cost_month_by_cost_center_usd",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "cost_center",
+            "rowField": "month",
+            "valueField": "Value",
+            "emptyValue": "zero"
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "month\\cost_center"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "month\\cost_center",
+        "stacking": "normal",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 27,
+        "w": 8,
+        "h": 10
+      },
+      "id": 15
     },
     {
       "type": "barchart",
@@ -778,12 +899,12 @@
         }
       },
       "gridPos": {
-        "x": 12,
+        "x": 16,
         "y": 27,
-        "w": 12,
+        "w": 8,
         "h": 10
       },
-      "id": 14
+      "id": 16
     },
     {
       "type": "row",
@@ -796,7 +917,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 15
+      "id": 17
     },
     {
       "type": "table",
@@ -927,7 +1048,7 @@
         "w": 12,
         "h": 9
       },
-      "id": 16
+      "id": 18
     },
     {
       "type": "table",
@@ -1058,7 +1179,7 @@
         "w": 12,
         "h": 9
       },
-      "id": 17
+      "id": 19
     },
     {
       "type": "barchart",
@@ -1133,7 +1254,7 @@
         "w": 24,
         "h": 8
       },
-      "id": 18
+      "id": 20
     },
     {
       "type": "row",
@@ -1146,7 +1267,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 19
+      "id": 21
     },
     {
       "type": "stat",
@@ -1190,7 +1311,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 20
+      "id": 22
     },
     {
       "type": "stat",
@@ -1233,7 +1354,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 21
+      "id": 23
     },
     {
       "type": "stat",
@@ -1276,7 +1397,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 22
+      "id": 24
     },
     {
       "type": "stat",
@@ -1320,7 +1441,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 23
+      "id": 25
     },
     {
       "type": "row",
@@ -1333,7 +1454,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 24
+      "id": 26
     },
     {
       "type": "text",
@@ -1348,7 +1469,7 @@
         "w": 24,
         "h": 4
       },
-      "id": 25
+      "id": 27
     },
     {
       "type": "row",
@@ -1361,7 +1482,7 @@
         "w": 24,
         "h": 1
       },
-      "id": 26
+      "id": 28
     },
     {
       "type": "gauge",
@@ -1421,12 +1542,12 @@
         "w": 4,
         "h": 5
       },
-      "id": 27
+      "id": 29
     },
     {
       "type": "stat",
       "title": "Days compared",
-      "description": "N in the this-month-against-last panels: complete days of this month so far.",
+      "description": "N in the this-month-against-last panels: complete days of this month so far, capped at the length of last month (28 or 29 at the end of March).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1462,10 +1583,53 @@
       "gridPos": {
         "x": 4,
         "y": 67,
+        "w": 3,
+        "h": 5
+      },
+      "id": 30
+    },
+    {
+      "type": "stat",
+      "title": "Latest complete day",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day Cost Explorer has.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (day) (aws_cost_latest_day_info)",
+          "refId": "A",
+          "legendFormat": "{{day}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "name",
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 7,
+        "y": 67,
         "w": 4,
         "h": 5
       },
-      "id": 28
+      "id": 31
     },
     {
       "type": "stat",
@@ -1517,12 +1681,12 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 8,
+        "x": 11,
         "y": 67,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
-      "id": 29
+      "id": 32
     },
     {
       "type": "stat",
@@ -1560,17 +1724,17 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 12,
+        "x": 14,
         "y": 67,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
-      "id": 30
+      "id": 33
     },
     {
       "type": "stat",
       "title": "Fixed-cost items without a price",
-      "description": "Items in fixed-costs.json with amount_usd null. Enter the price and rebuild the exporter.",
+      "description": "Items in the mounted fixed-costs file with amount_usd null. Enter the price and restart the exporter.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1617,12 +1781,12 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 16,
+        "x": 17,
         "y": 67,
         "w": 4,
         "h": 5
       },
-      "id": 31
+      "id": 34
     },
     {
       "type": "stat",
@@ -1661,12 +1825,12 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 67,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
-      "id": 32
+      "id": 35
     }
   ],
   "links": [

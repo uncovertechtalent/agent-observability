@@ -26,6 +26,11 @@ cost center the allocation file does not list stops the exporter with a message.
 Credentials come from the host's AWS shared config, mounted read-only (AWS_PROFILE picks
 the profile). The metrics carry real spend: the dashboards are internal and never shared.
 Cost Explorer data lags by up to a day and the latest days are marked estimated.
+
+Rolling back to an exporter from before cache version 2 needs the cache volume removed
+first (docker volume rm agent-observability_aws_cost_exporter_data; about five requests
+refill it): the old code reads a day's services as numbers, and version 2 stores a dict of
+usage types per service.
 """
 
 import fnmatch
@@ -66,6 +71,9 @@ def log(msg):
     print(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {msg}", flush=True)
 
 
+CONFIG_ERRORS = []  # a config file that could not be read; validate() reports it and main() stops
+
+
 def load_json(path, default):
     try:
         with open(path) as f:
@@ -73,6 +81,15 @@ def load_json(path, default):
     except FileNotFoundError:
         log(f"no {path}; using an empty one")
         return default
+    except (OSError, ValueError) as e:  # a directory where a file was expected (a mount of a path that did not exist), or bad JSON
+        CONFIG_ERRORS.append(f"cannot read {path}: {type(e).__name__}: {e}")
+        return default
+
+
+def utc_today():
+    """Today in UTC. TODAY=YYYY-MM-DD overrides it, for the offline test."""
+    t = os.environ.get("TODAY")
+    return date.fromisoformat(t) if t else datetime.now(timezone.utc).date()
 
 
 ALLOCATION = load_json(ALLOCATION_FILE, {"rules": []})
@@ -101,10 +118,10 @@ def validate(allocation=None, fixed=None):
     """Problems in the two config files: a rule or an item that names no cost center or one the
     allocation file does not list, a rule that would match everything, an amount that is not a number.
     The exporter refuses to start on any of them, so a typo cannot make a phantom cost center."""
+    problems = list(CONFIG_ERRORS) if allocation is None and fixed is None else []
     allocation = ALLOCATION if allocation is None else allocation
     fixed = FIXED if fixed is None else fixed
     known = {c.get("name") for c in allocation.get("cost_centers", [])}
-    problems = []
     for i, rule in enumerate(allocation.get("rules", []), 1):
         c = rule.get("cost_center")
         if not c:
@@ -190,7 +207,7 @@ def monthly_by_record_type(ce, start, end):
 
 def fetch(ce, budgets, account):
     now = time.time()
-    today = datetime.now(timezone.utc).date()
+    today = utc_today()
     this_month, following = month_start(today), next_month(today)
     hist_start = month_start(today, HISTORY_MONTHS)
 
@@ -316,7 +333,7 @@ def render():
         cur, hist = cache.get("current", {}), cache.get("history", {})
         days = {**usage_rows(hist), **usage_rows(cur)}  # day -> service -> usage type -> cost
         estimated = set(hist.get("estimated", [])) | set(cur.get("estimated", []))
-        today_d = datetime.now(timezone.utc).date()
+        today_d = utc_today()
         today = today_d.isoformat()
         this_month = cur.get("month", "")[:7]
         prior_month = month_start(today_d, 1).isoformat()[:7]
@@ -367,8 +384,9 @@ def render():
                    for k in sorted(keys)]
             return [x for x in out if x[1] or x[2]]  # a key that is zero on every day (a zero-amount group) says nothing
 
-        # month to date against the same calendar days of the month before: complete days 1..n of each
-        n = today_d.day - 1
+        # month to date against the same calendar days of the month before: complete days 1..n of each,
+        # n capped at the length of the month before (28 or 29 at the end of March)
+        n = min(today_d.day - 1, (month_start(today_d) - timedelta(days=1)).day)
         to_date = {}
         for d in days:
             if d[:7] in (this_month, prior_month) and int(d[8:10]) <= n:
@@ -381,9 +399,6 @@ def render():
 
         m("aws_cost_day_usd", "gauge", "Unblended cost of one UTC day by service, from Cost Explorer.",
           [({"day": d, "service": s}, round(v, 6)) for d, row in sorted(svc.items()) for s, v in row.items() if abs(v) >= 1e-6])
-        m("aws_cost_day_usage_usd", "gauge", "Unblended cost of one UTC day per service and usage type, with the cost center allocation.json gives the pair.",
-          [({"day": d, "service": s, "usage_type": u, "cost_center": cost_center(s, u)}, round(v, 6))
-           for d, row in sorted(days.items()) for s, us in row.items() for u, v in us.items() if abs(v) >= 1e-6])
         m("aws_cost_day_by_cost_center_usd", "gauge", "Unblended cost of one UTC day by cost center (virtual tags from allocation.json).",
           [({"day": d, "cost_center": c}, round(v, 6)) for d, row in sorted(centers.items()) for c, v in row.items() if abs(v) >= 1e-6])
         m("aws_cost_day_total_usd", "gauge", "Unblended cost of one UTC day, all services.",
@@ -408,7 +423,7 @@ def render():
            for (s, u), v in sorted(mtd_usage.items()) if abs(v) >= 1e-6])
         m("aws_cost_allocated_ratio", "gauge", "Share of this month's cost that a rule in allocation.json maps to a cost center.",
           [({}, round(allocated / mtd_total, 6))] if mtd_total > 0 else [])
-        m("aws_cost_to_date_days", "gauge", "Complete days of the month compared in the to-date series: 1 to the day before today.",
+        m("aws_cost_to_date_days", "gauge", "Complete days of the month compared in the to-date series: 1 to the day before today, capped at the length of the month before.",
           [({}, n)] if cur else [])
         m("aws_cost_to_date_usd", "gauge", "Cost of the complete days 1 to N of this month, and of the same days of the month before.",
           [({"period": p}, round(v, 6)) for (p, kind, k), v in sorted(to_date.items()) if kind == ""])
@@ -416,8 +431,6 @@ def render():
           [({"period": p, "service": k}, round(v, 6)) for (p, kind, k), v in sorted(to_date.items()) if kind == "service" and abs(v) >= 1e-6])
         m("aws_cost_to_date_by_cost_center_usd", "gauge", "The to-date comparison by cost center.",
           [({"period": p, "cost_center": k}, round(v, 6)) for (p, kind, k), v in sorted(to_date.items()) if kind == "cost_center" and abs(v) >= 1e-6])
-        m("aws_cost_trailing_usd", "gauge", f"Cost of the last {TRAILING_DAYS} complete UTC days, all services (for unit costs).",
-          [({"days": str(len(trailing))}, round(sum(totals[d] for d in trailing), 6))] if trailing else [])
         m("aws_cost_trailing_by_cost_center_usd", "gauge", f"Cost of the last {TRAILING_DAYS} complete UTC days by cost center (for unit costs).",
           [({"days": str(len(trailing)), "cost_center": c}, round(v, 6)) for c, v in sorted(
               {c: sum(centers[d].get(c, 0.0) for d in trailing) for d2 in trailing for c in centers[d2]}.items()) if abs(v) >= 1e-6])
