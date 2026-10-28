@@ -1,0 +1,7 @@
+# What to ping. Copy this file to lan-icmp.local.yml (git-ignored) and list the hosts; the lan-icmp job in
+# prometheus.yml reads that file, so no address enters git. The addresses below are from the documentation
+# range. "name" shows on the alert title, "role" says what the host does.
+- targets: [192.0.2.1]
+  labels: {name: gateway, role: gateway}
+- targets: [192.0.2.10]
+  labels: {name: file-server, role: nas}

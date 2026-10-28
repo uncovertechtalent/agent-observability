@@ -7,3 +7,4 @@ alert-issues/secrets/
 prometheus/secrets/
 pager/secrets/
 aws-cost-exporter/fixed-costs.local.json
+prometheus/targets/*.local.yml

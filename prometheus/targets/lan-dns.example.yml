@@ -1,0 +1,7 @@
+# DNS servers to ask for a real name (the dns_a module in blackbox/blackbox.yml). Copy to lan-dns.local.yml.
+# A target is the server's address. Role "dns-primary" is the server DHCP hands out: its failure pages.
+# Any other role is a ticket.
+- targets: [192.0.2.53]
+  labels: {name: dns-main, role: dns-primary}
+- targets: [192.0.2.54]
+  labels: {name: dns-spare, role: dns-secondary}

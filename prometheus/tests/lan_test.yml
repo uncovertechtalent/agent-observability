@@ -1,0 +1,243 @@
+# promtool test rules prometheus/tests/lan_test.yml
+rule_files:
+  - ../rules/lan.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A scrape target stays down for 6 minutes: a ticket after 5. The pager has its own page, so it is left out here.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="loki", instance="loki:3100"}'
+        values: '1 0x10'
+      - series: 'up{job="pager", instance="pager:9096"}'
+        values: '1 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: loki, instance: "loki:3100"}
+            exp_annotations:
+              summary: Prometheus cannot scrape the loki target.
+
+  # A host stops answering ping: a ticket after 3 minutes; a host that answers stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="lan-icmp", instance="192.0.2.1", name="gateway", role="gateway"}'
+        values: '1 0x10'
+      - series: 'probe_success{job="lan-icmp", instance="192.0.2.10", name="file-server", role="nas"}'
+        values: '1x11'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LANHostDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: LANHostDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-icmp, instance: "192.0.2.1", name: gateway, role: gateway}
+            exp_annotations:
+              summary: gateway (gateway) does not answer ping.
+
+  # The DNS server in DHCP stops answering its own name: a page after 2 minutes. The spare one: a ticket after 5.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1 0x10'
+      - series: 'probe_success{job="lan-dns", instance="192.0.2.54", name="dns-spare", role="dns-secondary"}'
+        values: '1 0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LANDNSDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: lan-dns, instance: "192.0.2.53", name: dns-main, role: dns-primary}
+            exp_annotations:
+              summary: The DNS server every LAN client uses (dns-main) does not answer DNS queries.
+      - eval_time: 4m
+        alertname: LANDNSSecondaryDown
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LANDNSSecondaryDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-dns, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
+            exp_annotations:
+              summary: The second DNS server (dns-spare) does not answer DNS queries.
+
+  # The internet goes down: both servers still answer their own name but cannot resolve a real one. Tickets for the
+  # upstream after 5 minutes, and no page.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1x12'
+      - series: 'probe_success{job="lan-dns-upstream", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1 0x11'
+      - series: 'probe_success{job="lan-dns-upstream", instance="192.0.2.54", name="dns-spare", role="dns-secondary"}'
+        values: '1 0x11'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LANUpstreamDNSDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LANUpstreamDNSDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.53", name: dns-main, role: dns-primary}
+            exp_annotations:
+              summary: dns-main does not resolve names from its upstream.
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
+            exp_annotations:
+              summary: dns-spare does not resolve names from its upstream.
+      - eval_time: 8m
+        alertname: LANDNSDown
+        exp_alerts: []
+
+  # A resolver that takes 1.5 s to answer for 12 minutes: a ticket, for either probe. 0.2 s stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'probe_duration_seconds{job="lan-dns-upstream", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1.5x15'
+      - series: 'probe_duration_seconds{job="lan-dns", instance="192.0.2.54", name="dns-spare", role="dns-secondary"}'
+        values: '1.5x15'
+      - series: 'probe_duration_seconds{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '0.2x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LANDNSSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.53", name: dns-main, role: dns-primary}
+            exp_annotations:
+              summary: dns-main takes over 1 s to answer a DNS query.
+          - exp_labels: {severity: ticket, job: lan-dns, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
+            exp_annotations:
+              summary: dns-spare takes over 1 s to answer a DNS query.
+
+  # A service stops accepting connections: a ticket after 3 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="lan-services", instance="192.0.2.10:8080", name="dashboard", role="web"}'
+        values: '1 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LANServiceDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-services, instance: "192.0.2.10:8080", name: dashboard, role: web}
+            exp_annotations:
+              summary: The dashboard service does not accept connections on its port.
+
+  # A host boots at t = 1000 s. The alert fires while it is under 15 minutes old, carries the host as name, and ends after.
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{job="nodeexp", instance="192.0.2.10:9100", host="file-server"}'
+        values: '1000x50'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: HostRebooted
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: nodeexp, instance: "192.0.2.10:9100", host: file-server, name: file-server}
+            exp_annotations:
+              summary: A host restarted within the last 15 minutes.
+      - eval_time: 40m
+        alertname: HostRebooted
+        exp_alerts: []
+
+  # A UniFi device's uptime resets: the alert runs until its uptime passes 15 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'unpoller_device_uptime_seconds{job="unifi", name="switch-a", type="usw"}'
+        values: '86400+60x5 60+60x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: UniFiDeviceRebooted
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: UniFiDeviceRebooted
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: unifi, name: switch-a, type: usw}
+            exp_annotations:
+              summary: A UniFi device restarted within the last 15 minutes.
+      - eval_time: 30m
+        alertname: UniFiDeviceRebooted
+        exp_alerts: []
+
+  # Two hosts and three devices restart together: one mass-reboot alert counting five.
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{job="nodeexp", instance="a:9100"}'
+        values: '0x30'
+      - series: 'node_boot_time_seconds{job="nodeexp", instance="b:9100"}'
+        values: '30x30'
+      - series: 'unpoller_device_uptime_seconds{job="unifi", name="d1", type="usw"}'
+        values: '60+60x30'
+      - series: 'unpoller_device_uptime_seconds{job="unifi", name="d2", type="uap"}'
+        values: '30+60x30'
+      - series: 'unpoller_device_uptime_seconds{job="unifi", name="d3", type="uap"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LANMassReboot
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "5 hosts and network devices restarted within 15 minutes: a power cut, or an outage of what they share."
+      - eval_time: 25m
+        alertname: LANMassReboot
+        exp_alerts: []
+
+  # One host restarts and nothing else does: no mass-reboot alert.
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{job="nodeexp", instance="a:9100"}'
+        values: '1000x30'
+      - series: 'unpoller_device_uptime_seconds{job="unifi", name="d1", type="usw"}'
+        values: '864000+60x30'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: LANMassReboot
+        exp_alerts: []
+
+  # An array resyncs for 8 minutes: a ticket after 5, named by the array. Idle: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'node_md_state{job="nodeexp", instance="a:9100", device="md3", state="resync"}'
+        values: '0 1x15'
+      - series: 'node_md_state{job="nodeexp", instance="a:9100", device="md3", state="active"}'
+        values: '1 0x15'
+      - series: 'node_md_state{job="nodeexp", instance="a:9100", device="md2", state="resync"}'
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HostRaidResyncing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HostRaidResyncing
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: nodeexp, instance: "a:9100", device: md3, state: resync, name: md3}
+            exp_annotations:
+              summary: A software RAID array is in resync; check its progress on the dashboard.
+
+  # A mirror with one of two disks active pages after 2 minutes. A healthy one and a failed-disk count of zero stay quiet.
+  - interval: 1m
+    input_series:
+      - series: 'node_md_disks{job="nodeexp", instance="a:9100", device="md3", state="active"}'
+        values: '2 1x10'
+      - series: 'node_md_disks{job="nodeexp", instance="a:9100", device="md3", state="failed"}'
+        values: '0 1x10'
+      - series: 'node_md_disks_required{job="nodeexp", instance="a:9100", device="md3"}'
+        values: '2x11'
+      - series: 'node_md_disks{job="nodeexp", instance="a:9100", device="md2", state="active"}'
+        values: '4x11'
+      - series: 'node_md_disks{job="nodeexp", instance="a:9100", device="md2", state="failed"}'
+        values: '0x11'
+      - series: 'node_md_disks_required{job="nodeexp", instance="a:9100", device="md2"}'
+        values: '4x11'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HostRaidDegraded
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HostRaidDegraded
+        exp_alerts:
+          - exp_labels: {severity: page, job: nodeexp, instance: "a:9100", device: md3, name: md3}
+            exp_annotations:
+              summary: A software RAID array has a failed disk, fewer active disks than it needs, or is inactive.
