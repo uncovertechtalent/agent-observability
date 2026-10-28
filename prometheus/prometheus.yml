@@ -114,10 +114,20 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  # DNS servers, asked for a real name. A minute apart keeps the probe's own load on the servers small.
+  # DNS servers, asked two ways: for a name the server answers itself (lan-dns, tests the server alone) and for a
+  # real name it fetches from upstream (lan-dns-upstream, tests the server and the internet). Both read the same
+  # target file. A minute between probes keeps their load on the servers small.
   - job_name: lan-dns
     metrics_path: /probe
-    params: {module: [dns_a]}
+    params: {module: [dns_local]}
+    scrape_interval: 60s
+    scrape_timeout: 5s
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/lan-dns.local.yml]
+    relabel_configs: *blackbox_relabel
+  - job_name: lan-dns-upstream
+    metrics_path: /probe
+    params: {module: [dns_upstream]}
     scrape_interval: 60s
     scrape_timeout: 5s
     file_sd_configs:

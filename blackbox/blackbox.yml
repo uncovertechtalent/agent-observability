@@ -5,9 +5,22 @@ modules:
     timeout: 4s
     icmp:
       preferred_ip_protocol: ip4
-  # Asks the DNS server (the target) for a real name and wants an A record back. The name's TTL is
-  # short, so a probe a minute apart regularly reaches the upstream resolver.
-  dns_a:
+  # Asks the DNS server (the target) for a name it answers itself: every Pi-hole answers pi.hole with its own
+  # address. This tests the server alone, so an outage of the internet does not fail it.
+  dns_local:
+    prober: dns
+    timeout: 4s
+    dns:
+      transport_protocol: udp
+      preferred_ip_protocol: ip4
+      query_name: pi.hole
+      query_type: A
+      validate_answer_rrs:
+        fail_if_none_matches_regexp:
+          - '\sA\s\d+\.\d+\.\d+\.\d+$'
+  # Asks for a real name the server must fetch from its upstream resolver. The name's TTL is short, so a probe
+  # a minute apart regularly goes upstream. It fails when the server or its upstream (the internet) fails.
+  dns_upstream:
     prober: dns
     timeout: 4s
     dns:

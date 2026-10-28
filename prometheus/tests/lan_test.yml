@@ -41,7 +41,7 @@ tests:
             exp_annotations:
               summary: gateway (gateway) does not answer ping.
 
-  # The DNS server in DHCP stops resolving: a page after 2 minutes. The spare one: a ticket after 5.
+  # The DNS server in DHCP stops answering its own name: a page after 2 minutes. The spare one: a ticket after 5.
   - interval: 1m
     input_series:
       - series: 'probe_success{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
@@ -54,7 +54,7 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, job: lan-dns, instance: "192.0.2.53", name: dns-main, role: dns-primary}
             exp_annotations:
-              summary: The DNS server every LAN client uses (dns-main) does not resolve the probe name.
+              summary: The DNS server every LAN client uses (dns-main) does not answer DNS queries.
       - eval_time: 4m
         alertname: LANDNSSecondaryDown
         exp_alerts: []
@@ -63,22 +63,54 @@ tests:
         exp_alerts:
           - exp_labels: {severity: ticket, job: lan-dns, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
             exp_annotations:
-              summary: The second DNS server (dns-spare) does not resolve the probe name.
+              summary: The second DNS server (dns-spare) does not answer DNS queries.
 
-  # A resolver that takes 1.5 s for 12 minutes: a ticket. 0.2 s stays quiet.
+  # The internet goes down: both servers still answer their own name but cannot resolve a real one. Tickets for the
+  # upstream after 5 minutes, and no page.
   - interval: 1m
     input_series:
-      - series: 'probe_duration_seconds{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+      - series: 'probe_success{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1x12'
+      - series: 'probe_success{job="lan-dns-upstream", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
+        values: '1 0x11'
+      - series: 'probe_success{job="lan-dns-upstream", instance="192.0.2.54", name="dns-spare", role="dns-secondary"}'
+        values: '1 0x11'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LANUpstreamDNSDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LANUpstreamDNSDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.53", name: dns-main, role: dns-primary}
+            exp_annotations:
+              summary: dns-main does not resolve names from its upstream.
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
+            exp_annotations:
+              summary: dns-spare does not resolve names from its upstream.
+      - eval_time: 8m
+        alertname: LANDNSDown
+        exp_alerts: []
+
+  # A resolver that takes 1.5 s to answer for 12 minutes: a ticket, for either probe. 0.2 s stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'probe_duration_seconds{job="lan-dns-upstream", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
         values: '1.5x15'
       - series: 'probe_duration_seconds{job="lan-dns", instance="192.0.2.54", name="dns-spare", role="dns-secondary"}'
+        values: '1.5x15'
+      - series: 'probe_duration_seconds{job="lan-dns", instance="192.0.2.53", name="dns-main", role="dns-primary"}'
         values: '0.2x15'
     alert_rule_test:
       - eval_time: 12m
         alertname: LANDNSSlow
         exp_alerts:
-          - exp_labels: {severity: ticket, job: lan-dns, instance: "192.0.2.53", name: dns-main, role: dns-primary}
+          - exp_labels: {severity: ticket, job: lan-dns-upstream, instance: "192.0.2.53", name: dns-main, role: dns-primary}
             exp_annotations:
-              summary: dns-main takes over 1 s to resolve the probe name.
+              summary: dns-main takes over 1 s to answer a DNS query.
+          - exp_labels: {severity: ticket, job: lan-dns, instance: "192.0.2.54", name: dns-spare, role: dns-secondary}
+            exp_annotations:
+              summary: dns-spare takes over 1 s to answer a DNS query.
 
   # A service stops accepting connections: a ticket after 3 minutes.
   - interval: 1m

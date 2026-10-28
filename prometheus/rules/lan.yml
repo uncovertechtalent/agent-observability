@@ -27,26 +27,36 @@ groups:
         annotations:
           summary: "{{ $labels.name }} ({{ $labels.role }}) does not answer ping."
 
-      # The DNS server in DHCP serves the whole LAN, so it pages. A second server that no client uses is a ticket.
+      # The DNS server in DHCP serves the whole LAN, so it pages. The page reads the local probe (a name the server
+      # answers itself), so an outage of the internet does not page as a DNS fault. A second server that no client
+      # uses is a ticket.
       - alert: LANDNSDown
         expr: probe_success{job="lan-dns", role="dns-primary"} == 0
         for: 2m
         labels: {severity: page}
         annotations:
-          summary: "The DNS server every LAN client uses ({{ $labels.name }}) does not resolve the probe name."
+          summary: "The DNS server every LAN client uses ({{ $labels.name }}) does not answer DNS queries."
       - alert: LANDNSSecondaryDown
         expr: probe_success{job="lan-dns", role!="dns-primary"} == 0
         for: 5m
         labels: {severity: ticket}
         annotations:
-          summary: "The second DNS server ({{ $labels.name }}) does not resolve the probe name."
-      # The probe asks for a name that expires after a minute, so a slow upstream shows here too.
+          summary: "The second DNS server ({{ $labels.name }}) does not answer DNS queries."
+      # The server answers but cannot resolve a real name: its upstream or the internet is down. A ticket.
+      # Alertmanager mutes it while the same server's local alert fires (alertmanager.yml).
+      - alert: LANUpstreamDNSDown
+        expr: probe_success{job="lan-dns-upstream"} == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.name }} does not resolve names from its upstream."
+      # The upstream probe's name expires after a minute, so a slow upstream shows here too.
       - alert: LANDNSSlow
-        expr: probe_duration_seconds{job="lan-dns"} > 1
+        expr: probe_duration_seconds{job=~"lan-dns|lan-dns-upstream"} > 1
         for: 10m
         labels: {severity: ticket}
         annotations:
-          summary: "{{ $labels.name }} takes over 1 s to resolve the probe name."
+          summary: "{{ $labels.name }} takes over 1 s to answer a DNS query."
 
       - alert: LANServiceDown
         expr: probe_success{job="lan-services"} == 0
