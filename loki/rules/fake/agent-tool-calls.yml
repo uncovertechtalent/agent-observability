@@ -7,9 +7,9 @@ groups:
     interval: 1m
     rules:
       # Denied calls in the trailing 15 minutes, by source. Feeds the AgentToolDenialsSpike alert
-      # in prometheus/rules/alerts.yml. "or vector(0)" writes a 0 without a source label when
-      # nothing was denied, so a quiet window reads 0 and a missing series means the ruler or
-      # the telemetry stopped.
+      # in prometheus/rules/alerts.yml. "or vector(0)" adds a series with an empty label set, which
+      # never matches a series that has a source label, so that 0 series is written on every run,
+      # next to the per-source counts. A missing series means the ruler or the telemetry stopped.
       - record: source:claude_code_tool_denials:count15m
         expr: |
           sum by (source) (count_over_time({service_name=~"claude-code.*"} | event_name="tool_decision" | decision="reject" [15m]))
