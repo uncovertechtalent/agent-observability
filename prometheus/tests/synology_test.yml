@@ -1,0 +1,124 @@
+# promtool test rules prometheus/tests/synology_test.yml
+rule_files:
+  - ../rules/synology.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A disk turns critical: a page after 5 minutes, named by the disk. Healthy disks stay quiet.
+  - interval: 1m
+    input_series:
+      - series: 'diskHealthStatus{job="snmp", disk="Disk 2", diskID="0x01"}'
+        values: '1 3x10'
+      - series: 'diskStatus{job="snmp", disk="Disk 2", diskID="0x01"}'
+        values: '1x11'
+      - series: 'diskHealthStatus{job="snmp", disk="Disk 1", diskID="0x02"}'
+        values: '1x11'
+      - series: 'diskStatus{job="snmp", disk="Disk 1", diskID="0x02"}'
+        values: '1x11'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SynologyDiskFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: SynologyDiskFailing
+        exp_alerts:
+          - exp_labels: {severity: page, disk: Disk 2, name: Disk 2}
+            exp_annotations:
+              summary: A NAS disk reports a crashed state, a failed system partition, or a critical or failing health.
+
+  # A disk crashes (status 5): the same page.
+  - interval: 1m
+    input_series:
+      - series: 'diskStatus{job="snmp", disk="Disk 3", diskID="0x03"}'
+        values: '1 5x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SynologyDiskFailing
+        exp_alerts:
+          - exp_labels: {severity: page, disk: Disk 3, name: Disk 3}
+            exp_annotations:
+              summary: A NAS disk reports a crashed state, a failed system partition, or a critical or failing health.
+
+  # Five bad sectors that never change are no ticket; five new ones in the day are. The value -1 (not reported) is quiet.
+  - interval: 1h
+    input_series:
+      - series: 'diskBadSector{job="snmp", disk="Disk 1", diskID="0x02"}'
+        values: '5x20 5 8x10'
+      - series: 'diskBadSector{job="snmp", disk="Disk 4", diskID="0x04"}'
+        values: '5x40'
+      - series: 'diskBadSector{job="snmp", disk="Cache 1", diskID="0x05"}'
+        values: '-1x40'
+    alert_rule_test:
+      - eval_time: 15h
+        alertname: SynologyDiskWarning
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: SynologyDiskWarning
+        exp_alerts:
+          - exp_labels: {severity: ticket, disk: Disk 1, name: Disk 1}
+            exp_annotations:
+              summary: A NAS disk reports a health warning, new bad sectors, or under 20 percent of its life.
+
+  # An SSD with 15 percent of its life left: a ticket. A hard disk reporting -1 is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'diskRemainLife{job="snmp", disk="Cache 1", diskID="0x05"}'
+        values: '15x30'
+      - series: 'diskRemainLife{job="snmp", disk="Disk 1", diskID="0x02"}'
+        values: '-1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SynologyDiskWarning
+        exp_alerts:
+          - exp_labels: {severity: ticket, disk: Cache 1, name: Cache 1}
+            exp_annotations:
+              summary: A NAS disk reports a health warning, new bad sectors, or under 20 percent of its life.
+
+  # 62 degrees for 20 minutes: a ticket. 58 degrees: nothing.
+  - interval: 1m
+    input_series:
+      - series: 'diskTemperature{job="snmp", disk="Disk 1", diskID="0x02"}'
+        values: '62x30'
+      - series: 'diskTemperature{job="snmp", disk="Disk 2", diskID="0x01"}'
+        values: '58x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SynologyDiskHot
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: snmp, disk: Disk 1, diskID: "0x02", name: Disk 1}
+            exp_annotations:
+              summary: A NAS disk has been over 60 degrees C for 15 minutes.
+
+  # A degraded volume (11) pages after 5 minutes; syncing (7) and normal (1) do not.
+  - interval: 1m
+    input_series:
+      - series: 'raidStatus{job="snmp", raidName="Volume 1"}'
+        values: '1 7 7 11x10'
+      - series: 'raidStatus{job="snmp", raidName="Volume 2"}'
+        values: '7x14'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyVolumeDegraded
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SynologyVolumeDegraded
+        exp_alerts:
+          - exp_labels: {severity: page, job: snmp, raidName: Volume 1, name: Volume 1}
+            exp_annotations:
+              summary: A NAS volume is degraded or has crashed.
+
+  # A stopped fan is a ticket.
+  - interval: 1m
+    input_series:
+      - series: 'systemStatus{job="snmp"}'
+        values: '1x10'
+      - series: 'systemFanStatus{job="snmp"}'
+        values: '1 2x9'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SynologySystemFault
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: snmp}
+            exp_annotations:
+              summary: The NAS reports a failed system status or a stopped internal fan.

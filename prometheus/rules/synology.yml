@@ -1,0 +1,54 @@
+# Synology DiskStation health from DSM's SNMP agent, scraped through snmp_exporter (module "synology"). The
+# disk label is the disk's name ("Disk 1", "Cache 2"), set by a metric relabel in the scrape job. Status
+# values are from the SYNOLOGY-*-MIB files on DSM:
+#   diskStatus        1 normal, 2 initialized, 3 not initialized, 4 system partition failed, 5 crashed
+#   diskHealthStatus  1 normal, 2 warning, 3 critical, 4 failing
+#   raidStatus        1 normal, 2 to 10 repair, migrate, sync, check and the like, 11 degraded, 12 crashed
+#   systemStatus and systemFanStatus   1 normal, 2 failed
+# A value of -1 means the disk does not report it (bad sectors on an NVMe cache disk, remaining life on a
+# hard disk). Without the SNMP job these rules never fire. Hard disk md resyncs are in lan.yml.
+groups:
+  - name: synology
+    rules:
+      - alert: SynologyDiskFailing
+        expr: |
+          label_replace(
+            max by (disk) ((diskStatus >= 4) or (diskHealthStatus >= 3)),
+            "name", "$1", "disk", "(.+)")
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "A NAS disk reports a crashed state, a failed system partition, or a critical or failing health."
+      # A warning, a bad sector that appeared today, or an SSD with under 20 percent of its life left.
+      - alert: SynologyDiskWarning
+        expr: |
+          label_replace(
+            max by (disk) (
+              (diskHealthStatus == 2)
+              or (increase(diskBadSector[1d]) > 0)
+              or (diskRemainLife >= 0 and diskRemainLife < 20)),
+            "name", "$1", "disk", "(.+)")
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "A NAS disk reports a health warning, new bad sectors, or under 20 percent of its life."
+      # A hard disk is in trouble at 55 and damaged near 60; an NVMe cache disk runs warmer. 60 for 15 minutes
+      # covers both without a ticket on every busy hour.
+      - alert: SynologyDiskHot
+        expr: label_replace(diskTemperature > 60, "name", "$1", "disk", "(.+)")
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "A NAS disk has been over 60 degrees C for 15 minutes."
+      - alert: SynologyVolumeDegraded
+        expr: label_replace((raidStatus >= 11) and (raidStatus <= 12), "name", "$1", "raidName", "(.+)")
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "A NAS volume is degraded or has crashed."
+      - alert: SynologySystemFault
+        expr: (systemStatus != 1) or (systemFanStatus != 1)
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The NAS reports a failed system status or a stopped internal fan."
