@@ -1,0 +1,3 @@
+# TCP services to connect to (the tcp_connect module). Copy to lan-services.local.yml. A target is address:port.
+- targets: ["192.0.2.10:8080"]
+  labels: {name: dashboard, role: web}

@@ -84,6 +84,15 @@ inhibit_rules:
   - source_matchers: [alertname="PagerDown"]
     target_matchers: [alertname="PagerDisconnected"]
     equal: [prometheus]
+  # A power cut restarts every host and device at once: one ticket for the outage, not one per device.
+  - source_matchers: [alertname="LANMassReboot"]
+    target_matchers: [alertname=~"HostRebooted|UniFiDeviceRebooted"]
+    equal: [prometheus]
+  # Both Prometheus servers probe the hosts that matter most. The NAS server's alert wins; the other
+  # stack's copy speaks only when the NAS server is silent, for example because its host is down.
+  - source_matchers: [prometheus="nas", alertname=~"LANHostDown|LANDNSDown|LANDNSSecondaryDown"]
+    target_matchers: [prometheus="agent-observability", alertname=~"LANHostDown|LANDNSDown|LANDNSSecondaryDown"]
+    equal: [alertname, name]
 
 receivers:
   - name: pager

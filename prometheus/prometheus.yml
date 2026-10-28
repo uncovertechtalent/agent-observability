@@ -96,3 +96,43 @@ scrape_configs:
     scrape_interval: 60s
     static_configs:
       - targets: ["aws-cost-exporter:9202"]
+
+  # The LAN, probed through the blackbox exporter. The targets are in prometheus/targets/*.local.yml
+  # (git-ignored, so no address enters git; the *.example.yml files show the shape). Without a file a job
+  # has no targets. Rules: rules/lan.yml.
+  - job_name: lan-icmp
+    metrics_path: /probe
+    params: {module: [icmp]}
+    scrape_timeout: 5s
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/lan-icmp.local.yml]
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # DNS servers, asked for a real name. A minute apart keeps the probe's own load on the servers small.
+  - job_name: lan-dns
+    metrics_path: /probe
+    params: {module: [dns_a]}
+    scrape_interval: 60s
+    scrape_timeout: 5s
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/lan-dns.local.yml]
+    relabel_configs: *blackbox_relabel
+
+  - job_name: lan-services
+    metrics_path: /probe
+    params: {module: [tcp_connect]}
+    scrape_timeout: 5s
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/lan-services.local.yml]
+    relabel_configs: *blackbox_relabel
+
+  # The other Prometheus on the LAN: each stack watches the other.
+  - job_name: lan-prometheus
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/lan-prometheus.local.yml]

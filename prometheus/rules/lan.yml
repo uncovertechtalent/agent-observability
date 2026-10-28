@@ -1,0 +1,102 @@
+# LAN health: scrape targets, the hosts and services the lan-* probe jobs watch (prometheus.yml), reboots and
+# RAID arrays. One file for two Prometheus servers: this stack loads it from rules/, and the second
+# Prometheus (the NAS one) runs a copy of it unchanged (README, "LAN health"). A rule whose metric a server
+# does not have never fires there, so the unpoller rules are quiet on this stack.
+#
+# The target files (prometheus/targets) set two labels on every probed target: name, which shows on the
+# alert title, and role, which says what the target does. The addresses stay in the git-ignored files.
+#
+# Severity: page for the DNS server every client uses and for a failed or degraded array, ticket for the rest.
+groups:
+  - name: lan_availability
+    rules:
+      # Any scrape target of any job. The pager and the Ollama proxy have their own page (alerting.yml,
+      # alerts.yml). A probe job's "up" is the blackbox exporter answering, so a dead exporter shows here
+      # while the probes behind it go silent.
+      - alert: ScrapeTargetDown
+        expr: up{job!~"pager|ollama-exporter"} == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Prometheus cannot scrape the {{ $labels.job }} target."
+
+      - alert: LANHostDown
+        expr: probe_success{job="lan-icmp"} == 0
+        for: 3m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.name }} ({{ $labels.role }}) does not answer ping."
+
+      # The DNS server in DHCP serves the whole LAN, so it pages. A second server that no client uses is a ticket.
+      - alert: LANDNSDown
+        expr: probe_success{job="lan-dns", role="dns-primary"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "The DNS server every LAN client uses ({{ $labels.name }}) does not resolve the probe name."
+      - alert: LANDNSSecondaryDown
+        expr: probe_success{job="lan-dns", role!="dns-primary"} == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The second DNS server ({{ $labels.name }}) does not resolve the probe name."
+      # The probe asks for a name that expires after a minute, so a slow upstream shows here too.
+      - alert: LANDNSSlow
+        expr: probe_duration_seconds{job="lan-dns"} > 1
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.name }} takes over 1 s to resolve the probe name."
+
+      - alert: LANServiceDown
+        expr: probe_success{job="lan-services"} == 0
+        for: 3m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The {{ $labels.name }} service does not accept connections on its port."
+
+  # A reboot fires for the 15 minutes after boot, so a scrape that lands late still sees it. Uptime and
+  # boot time reset on a power cut, a crash and a planned restart alike. Alertmanager mutes the single
+  # alerts while LANMassReboot fires, so one outage is one ticket (alertmanager.yml).
+  - name: lan_reboots
+    rules:
+      - alert: HostRebooted
+        expr: label_replace(time() - node_boot_time_seconds < 900, "name", "$1", "host", "(.+)")
+        labels: {severity: ticket}
+        annotations:
+          summary: "A host restarted within the last 15 minutes."
+      - alert: UniFiDeviceRebooted
+        expr: unpoller_device_uptime_seconds < 900
+        labels: {severity: ticket}
+        annotations:
+          summary: "A UniFi device restarted within the last 15 minutes."
+      - alert: LANMassReboot
+        expr: |
+          (count(time() - node_boot_time_seconds < 900) or vector(0))
+          + (count(unpoller_device_uptime_seconds < 900) or vector(0)) >= 3
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value }} hosts and network devices restarted within 15 minutes: a power cut, or an outage of what they share."
+
+  # Linux software RAID, from the node exporter's md collector.
+  - name: host_raid
+    rules:
+      # Resync after an unclean shutdown, recovery after a replaced disk. The array works meanwhile; the
+      # ticket stays open until it finishes, and the dashboard shows the progress.
+      - alert: HostRaidResyncing
+        expr: label_replace(node_md_state{state=~"resync|recovering"} == 1, "name", "$1", "device", "(.+)")
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "A software RAID array is in {{ $labels.state }}; check its progress on the dashboard."
+      - alert: HostRaidDegraded
+        expr: |
+          label_replace(
+              max by (job, instance, device) (node_md_disks{state="failed"} > 0)
+              or max by (job, instance, device) (node_md_disks{state="active"} < on(job, instance, device) node_md_disks_required)
+              or max by (job, instance, device) (node_md_state{state="inactive"} == 1),
+            "name", "$1", "device", "(.+)")
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "A software RAID array has a failed disk, fewer active disks than it needs, or is inactive."

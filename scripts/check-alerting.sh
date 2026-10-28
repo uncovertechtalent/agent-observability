@@ -52,6 +52,10 @@ route blackhole alertname=ModelSpilledToCPU severity=info prometheus=agent-obser
 route blackhole alertname=AWSCostDailySpike severity=ticket prometheus=agent-observability
 route board alertname=AWSCostExporterStale severity=ticket prometheus=agent-observability
 route board alertname=AWSCostReportStale severity=ticket prometheus=agent-observability
+route board alertname=LANHostDown severity=ticket prometheus=nas
+route pager,board alertname=LANDNSDown severity=page prometheus=agent-observability
+route pager,board alertname=HostRaidDegraded severity=page prometheus=nas
+route board alertname=LANMassReboot severity=ticket prometheus=nas
 route heartbeat-agent-observability alertname=Watchdog severity=none prometheus=agent-observability
 route heartbeat-nas alertname=Watchdog severity=none prometheus=nas
 route blackhole alertname=Watchdog severity=none

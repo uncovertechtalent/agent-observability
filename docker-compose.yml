@@ -51,6 +51,15 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # Pings, DNS queries and TCP connects against the LAN for the lan-* jobs in prometheus/prometheus.yml.
+  # Reached from Prometheus on the compose network only.
+  blackbox:
+    image: prom/blackbox-exporter:v0.26.0
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./blackbox:/etc/blackbox:ro
+    restart: unless-stopped
+
   loki:
     image: grafana/loki:3.5.0
     command: ["-config.file=/etc/loki/loki.yml"]

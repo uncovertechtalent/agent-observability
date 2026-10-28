@@ -1,0 +1,4 @@
+# The other Prometheus servers on the LAN, scraped for their own /metrics. A stack that watches the
+# other one survives either dying. Copy to lan-prometheus.local.yml.
+- targets: ["192.0.2.10:9090"]
+  labels: {name: second-prometheus, role: prometheus}
