@@ -916,10 +916,11 @@ def instant(panel):
     return panel
 
 
-def expr_sum(title, parts, description, unit=USD, decimals=2):
+def expr_sum(title, parts, description, unit=USD, decimals=2, math=None):
     """One number from several data sources: each query reduced to its last value, then added, server side.
 
     `parts` are (ref, target) pairs; the targets run hidden and the sum is the visible result.
+    `math` replaces the sum with another Grafana math expression over the reduced values ($RA, $RB, ...).
     Each query ends in `or vector(0)`, so a source with no data in the range is a zero rather than
     a missing operand (a reduce over an empty result returns nothing, and the math then returns
     nothing); the reduce's replaceNN turns a NaN into zero. Checked on 2026-10-27 over a range
@@ -931,7 +932,7 @@ def expr_sum(title, parts, description, unit=USD, decimals=2):
         targets.append({"datasource": EXPR, "refId": "R" + ref, "type": "reduce", "expression": ref, "reducer": "last",
                         "settings": {"mode": "replaceNN", "replaceWithValue": 0}, "hide": True})
     targets.append({"datasource": EXPR, "refId": "SUM", "type": "math",
-                    "expression": " + ".join(f"$R{ref}" for ref, _ in parts)})
+                    "expression": math or " + ".join(f"$R{ref}" for ref, _ in parts)})
     return {"type": "stat", "title": title, "description": description, "datasource": MIXED, "targets": targets,
             "fieldConfig": {"defaults": {"unit": unit, "decimals": decimals}, "overrides": []},
             "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "none", "graphMode": "none"}}
@@ -1059,13 +1060,17 @@ def aws_spend():
 # ---------------------------------------------------------------- finops
 
 ANOMALY_FLOOR_USD = 0.1  # a median below this counts as this in the anomaly ratio, so cents do not read as spikes
+# The fixed-costs.json item that pays for the Claude Code API calls (its `item` label on fixed_cost_month_usd).
+# Once it has an amount, the bill counts it in place of the calls at list price.
+CLAUDE_PLAN_ITEM = "Claude subscription"
 
 
 def finops():
     """One bill in the shape of a FinOps tool (Cloudability, Finout): the AWS account from the cost
     exporter (the cost and usage report in S3, or Cost Explorer), the Claude Code API calls from Loki
-    at their list price, and the fixed costs entered by hand, with the account's cost split into cost
-    centers by rule (virtual tags; the cost allocation tag named in allocation.json settles a line
+    at their list price, and the fixed costs entered by hand (the Claude plan among them: while it is
+    priced the bill counts the plan, not the list price, and a row shows the list price against it),
+    with the account's cost split into cost centers by rule (virtual tags; the cost allocation tag named in allocation.json settles a line
     first once the account activates it), this month
     against the same days of last month, the services and cost centers that moved most, the cost per
     resource (instances, buckets, distributions: report mode only), per-service and per-resource
@@ -1082,6 +1087,7 @@ def finops():
     this_td = 'max(aws_cost_to_date_usd{period="this_month"})'
     prior_td = 'max(aws_cost_to_date_usd{period="prior_month"})'
     cc_cost = request_sum("cost_usd", r)
+    plan = f'fixed_cost_month_usd{{item="{CLAUDE_PLAN_ITEM}"}}'
     compute7 = ('(sum(aws_cost_trailing_by_cost_center_usd{cost_center="compute"}) or vector(0)) '
                 '+ (sum(aws_cost_trailing_by_cost_center_usd{cost_center="data-transfer"}) or vector(0))')
 
@@ -1155,28 +1161,119 @@ def finops():
                   "fieldConfig": {"defaults": {}, "overrides": []},
                   "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "name", "colorMode": "none", "graphMode": "none"}}
 
+    def no_colour(panel):
+        """Amounts carry no colour: a stat's default thresholds turn anything above 80 red."""
+        panel["options"]["colorMode"] = "none"
+        return panel
+
+    def not_priced(panel):
+        """What a stat reads while the plan has no price: its query is empty."""
+        panel["fieldConfig"]["defaults"]["noValue"] = "Not priced"
+        return panel
+
+    def month_pin(panel):
+        """Pin a panel to the calendar month so far, in the browser's timezone, whatever range the dashboard shows."""
+        panel["timeFrom"] = "now/M"
+        return panel
+
+    def projection(title, math, unit, decimals, description, plan_needed=False):
+        """A number from the month's list price (Loki), the run-rate factor and, if `plan_needed`, the plan price.
+
+        $RA is the list price since the first of the month. $RB scales it to month end: the days in the month over
+        the days elapsed, with at least one day elapsed ($__range_s is the pinned panel's range, so the Loki sum and
+        the day count cover the same time; days_in_month is the UTC month, which only differs in the hours around
+        its turn). $RP is the plan price; with no price the query is empty, the reduce returns nothing and the
+        panel reads Not priced.
+        """
+        parts = [("A", target(f"{cc_cost} or vector(0)", ds=LOKI, queryType="instant")),
+                 ("B", target("days_in_month(vector(time())) * 86400 / clamp_min(vector($__range_s), 86400)",
+                              instant=True, range=False))]
+        if plan_needed:
+            parts.append(("P", target(f"max({plan})", instant=True, range=False)))
+        return not_priced(expr_sum(title, parts, description, unit=unit, decimals=decimals, math=math))
+
+    # Cumulative list price per hour against the plan. The Loki frame (query A) is summed per step and the
+    # transformations add it up from the first of the month; the plan line is the price now, drawn across the
+    # whole range (@ the range's end in seconds; @ end() would read a step in the future, which Grafana aligns up to),
+    # since the exporter's series only starts the day the price was entered.
+    through_month = timeseries("List price through the month against the plan", [], USD)
+    through_month.update(
+        datasource=MIXED, timeFrom="now/M", interval="1h", maxDataPoints=800,
+        description="The Claude Code API calls at list price, added up hour by hour from the first of the month "
+                    "(the browser's timezone), against the plan price as a flat line. The day the list price crosses the "
+                    "line is the day the plan has paid for itself. List price is what Claude Code reports per call, from its "
+                    "api_request events in Loki. The plan line is the price as of now, and is absent until the plan has a price.",
+        targets=[target(request_sum("cost_usd", "$__interval"), "List price", ds=LOKI, ref="A"),
+                 target(f"max({plan} @ ${{__to:date:seconds}})", "Plan price", ref="B")],
+        transformations=[
+            # The first step of a Loki range query looks back one step from the start of the range, so a step at
+            # or before the start would carry calls of the month before.
+            {"id": "filterByValue", "filter": {"id": "byRefId", "options": "A"},
+             "options": {"type": "include", "match": "all",
+                         "filters": [{"fieldName": "Time", "config": {"id": "greater", "options": {"value": "${__from}"}}}]}},
+            {"id": "calculateField", "filter": {"id": "byRefId", "options": "A"},
+             "options": {"mode": "cumulativeFunctions", "cumulative": {"reducer": "sum"}, "alias": "List price",
+                         "replaceFields": True}}])
+    # Hours without a call have no row, so the line steps over them instead of breaking.
+    through_month["fieldConfig"]["defaults"]["custom"].update(lineWidth=2, axisSoftMin=0, spanNulls=True,
+                                                             lineInterpolation="stepAfter")
+    through_month["fieldConfig"]["overrides"] = [{
+        "matcher": {"id": "byName", "options": "Plan price"},
+        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}},
+                       {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}}]}]
+    through_month["options"]["legend"]["calcs"] = ["lastNotNull"]
+
     p = [
         L.row("The bill, this month"),
         L.place(expr_sum("One bill", [
             ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
             ("B", target(f"{cc_cost} or vector(0)", ds=LOKI, queryType="instant")),
             ("C", target("sum(fixed_cost_month_usd) or vector(0)", instant=True, range=False)),
-        ], "AWS month to date, plus the Claude Code API calls in the dashboard's range at their list price, plus the "
-           "fixed costs entered in fixed-costs.json. Added server side from the three sources."), 5, 5),
+            ("D", target(f"clamp_max(count({plan}), 1) or vector(0)", instant=True, range=False)),
+        ], "AWS month to date, plus the fixed costs entered in fixed-costs.json, plus the Claude Code API calls in the "
+           "dashboard's range at their list price only while the Claude subscription has no price. Once it is priced, the plan "
+           "is one of the fixed costs and is the Claude term; the list price stays out of the bill and shows in the next row "
+           "for comparison. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series, and the "
+           "expression keeps the three sources apart.", math="$RA + $RC + (1 - $RD) * $RB"), 5, 5),
         L.place(instant(stat("AWS, month to date", "max(aws_cost_mtd_usd)", USD, decimals=2,
                              description="Unblended cost from the 1st (UTC) to now, today's partial cost included. The source lags by hours: "
                                          "the report lands up to three times a day.")), 4, 5),
         L.place(instant(stat("Claude Code API calls, list price", cc_cost, USD, decimals=2, ds=LOKI,
                              description="What the API calls in the range would cost at list price, from Claude Code's own api_request "
-                                         "events. The subscription covers them; the amount is what the subscription is worth this month.")), 5, 5),
+                                         "events. The subscription covers them. The bill counts this amount only while the "
+                                         "subscription has no price; the next row sets it against the plan.")), 5, 5),
         L.place(instant(stat("Fixed costs entered", "sum(fixed_cost_month_usd) or vector(0)", USD, decimals=2,
-                             description="Monthly subscriptions and seats from fixed-costs.json. Items without a price are counted on the data row below and left out here.")), 4, 5),
+                             description="Monthly subscriptions and seats from fixed-costs.json, the Claude plan included once it has a price. "
+                                         "Items without a price are counted on the data row below and left out here.")), 4, 5),
         L.place(instant(stat("AWS vs last month, same days", f"({this_td} - {prior_td}) / {prior_td}", "percentunit", decimals=0,
                              description="Complete days 1 to N of this month against days 1 to N of last month (N on the data row). "
                                          "Positive is up. A domain renewal or the monthly tax in one window and not the other shows here.")), 3, 5),
         L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
                             "Month-end forecast against the MONTHLY budget in AWS Budgets: the run rate of this month's complete days "
                             "in report mode, Cost Explorer's forecast otherwise (the data row names the method). Red above 100%."), 3, 5),
+
+        L.row("Claude plan against list price"),
+        L.place(not_priced(no_colour(instant(stat("Plan price this month", f"max({plan})", USD, decimals=2,
+                             description="The monthly price of the Claude subscription: the item named in fixed-costs.json, entered in the "
+                                         "git-ignored fixed-costs.local.json. It reads Not priced until the item has an amount.")))), 4, 5),
+        L.place(month_pin(no_colour(instant(stat("List price, month to date", cc_cost, USD, decimals=2, ds=LOKI,
+                                       description="What the Claude Code API calls since the first of the month would cost at list price. "
+                                                   "List price is what Claude Code reports per call (cost_usd on its api_request events, "
+                                                   "summed in Loki). The panel is pinned to the calendar month in the browser's timezone, "
+                                                   "whatever range the dashboard shows.")))), 5, 5),
+        L.place(month_pin(projection("List price, month-end projection", "$RA * $RB", USD, 2,
+                                     "Month-to-date list price divided by the days elapsed, times the days in the month. It is a run rate: it "
+                                     "assumes the rest of the month looks like the days so far, and it counts the first day of the month as "
+                                     "a whole day. List price is what Claude Code reports per call, from its api_request events in Loki.")), 5, 5),
+        L.place(month_pin(projection("Projected savings this month", "$RA * $RB - $RP", USD, 2,
+                                     "Projected month-end list price minus the plan price: what the plan saves against paying per call, as a "
+                                     "run rate. Negative means the plan costs more than the calls would at list price. Not shown until the "
+                                     "plan has a price.", plan_needed=True)), 5, 5),
+        L.place(month_pin(projection("List price as a multiple of the plan", "$RA * $RB / $RP", "suffix:x", 1,
+                                     "Projected month-end list price divided by the plan price. 1x means the plan costs what the calls "
+                                     "would at list price; above 1x the plan is cheaper. Not shown until the plan has a price.",
+                                     plan_needed=True)), 5, 5),
+        L.place(through_month, 24, 9),
 
         L.row("Cost centers (virtual tags)"),
         L.place(pivot_bars("Daily spend by cost center", "aws_cost_day_by_cost_center_usd", "day", "cost_center",
@@ -1282,11 +1379,13 @@ def finops():
             panel["options"].update(textMode="name", colorMode="none", graphMode="none")
             panel["targets"][0]["legendFormat"] = "{{source}}" if panel["title"] == "Source" else "{{method}}"
     return dashboard("finops", "FinOps: the bill",
-                     "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list "
-                     "price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, "
+                     "One bill in the shape of a FinOps tool: AWS from the cost exporter, fixed costs by hand (the Claude plan "
+                     "among them), Claude Code API calls from Loki at list price while the plan has no price; the plan against "
+                     "list price; cost centers by rule, this month against last, movers, anomalies, unit costs, "
                      "record types. Periods: AWS is the UTC calendar month to date, the Claude Code sums follow the dashboard's "
-                     "range in the browser's timezone, fixed costs are per month; with the default range (this month) they line "
-                     "up to within hours, with another range the bill adds that range's calls to this month's AWS. Internal; not shared.",
+                     "range in the browser's timezone (the plan row is pinned to the calendar month), fixed costs are per month; "
+                     "with the default range (this month) they line up to within hours, with another range an unpriced plan's "
+                     "bill adds that range's calls to this month's AWS. Internal; not shared.",
                      p, refresh="15m", time_from="now/M")
 
 
