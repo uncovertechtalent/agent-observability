@@ -122,8 +122,9 @@ services:
     depends_on: [loki]
     restart: unless-stopped
 
-  # AWS spend from Cost Explorer and AWS Budgets. The host's AWS shared config is mounted
-  # read-only and never leaves the host; no port is published, only Prometheus scrapes it.
+  # AWS spend from the cost and usage report in S3 (AWS_CUR_BUCKET set; Cost Explorer otherwise)
+  # and AWS Budgets. The host's AWS shared config is mounted read-only and never leaves the host;
+  # no port is published, only Prometheus scrapes it.
   aws-cost-exporter:
     build:
       context: ./aws-cost-exporter
@@ -133,6 +134,10 @@ services:
       - AWS_SHARED_CREDENTIALS_FILE=/aws/credentials
       - AWS_CONFIG_FILE=/aws/config
       - FIXED_COSTS_FILE=/config/fixed-costs.json
+      - CUR_BUCKET=${AWS_CUR_BUCKET:-}          # the report's bucket; empty keeps Cost Explorer as the source
+      - CUR_PREFIX=${AWS_CUR_PREFIX:-finops}    # the report definition's S3 prefix
+      - CUR_REPORT=${AWS_CUR_REPORT:-finops}    # and its name
+      - CUR_REGION=${AWS_CUR_REGION:-us-east-1}
     volumes:
       - ${HOME}/.aws:/aws:ro
       # the costs outside AWS: the committed example, or the priced git-ignored copy named in .env

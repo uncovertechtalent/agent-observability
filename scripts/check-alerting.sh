@@ -51,6 +51,7 @@ route board alertname=UCGMaxPollerScrapeFailing severity=ticket prometheus=nas
 route blackhole alertname=ModelSpilledToCPU severity=info prometheus=agent-observability
 route blackhole alertname=AWSCostDailySpike severity=ticket prometheus=agent-observability
 route board alertname=AWSCostExporterStale severity=ticket prometheus=agent-observability
+route board alertname=AWSCostReportStale severity=ticket prometheus=agent-observability
 route heartbeat-agent-observability alertname=Watchdog severity=none prometheus=agent-observability
 route heartbeat-nas alertname=Watchdog severity=none prometheus=nas
 route blackhole alertname=Watchdog severity=none

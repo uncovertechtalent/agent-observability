@@ -1,7 +1,7 @@
 {
   "uid": "aws-spend",
   "title": "AWS spend",
-  "description": "AWS account spend from Cost Explorer and AWS Budgets: month to date and forecast against the monthly budget, daily spend by service, top services, the last three months. Internal; not shared.",
+  "description": "AWS account spend from the cost exporter (the cost and usage report in S3, or Cost Explorer) and AWS Budgets: month to date and forecast against the monthly budget, daily spend by service, top services, the last three months. Internal; not shared.",
   "tags": [
     "agent-observability"
   ],
@@ -34,7 +34,7 @@
     {
       "type": "stat",
       "title": "Month to date",
-      "description": "Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day.",
+      "description": "Unblended cost from the 1st (UTC) to now, today's partial cost included. The source lags by hours.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -184,7 +184,7 @@
     {
       "type": "stat",
       "title": "Forecast, month end",
-      "description": "Actual days before the forecast's start plus Cost Explorer's forecast to the end of the month (forecast fetched daily).",
+      "description": "In report mode the run rate of this month's complete days to month end; in Cost Explorer mode the actual days before the forecast's start plus Cost Explorer's forecast (fetched daily).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -290,7 +290,7 @@
     {
       "type": "stat",
       "title": "AWS Budgets forecast",
-      "description": "The forecast AWS Budgets calculates itself, as a cross-check of the Cost Explorer figure.",
+      "description": "The forecast AWS Budgets calculates itself, as a cross-check of the exporter's figure.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -395,7 +395,7 @@
     {
       "type": "stat",
       "title": "Latest day",
-      "description": "May be partial: Cost Explorer marks recent days as estimated.",
+      "description": "The latest complete UTC day, without domain renewals and tax. In Cost Explorer mode it may still be an estimate.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -439,7 +439,7 @@
     {
       "type": "stat",
       "title": "Latest day estimated",
-      "description": "",
+      "description": "Cost Explorer marks recent days as estimates; in report mode the latest complete day is settled by construction.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -482,7 +482,7 @@
     {
       "type": "stat",
       "title": "Data age",
-      "description": "Time since the exporter last asked Cost Explorer for this month (every 12 h).",
+      "description": "Time since the report's latest delivery landed in S3 (up to three times a day), or since the exporter last asked Cost Explorer for this month (every 12 h).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -493,7 +493,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "time() - max(aws_cost_exporter_fetch_timestamp_seconds{part=\"current\"})",
+          "expr": "time() - (max(aws_cost_report_delivery_timestamp_seconds) or max(aws_cost_exporter_fetch_timestamp_seconds{part=\"current\"}))",
           "refId": "A",
           "instant": true,
           "range": false
@@ -512,11 +512,11 @@
               },
               {
                 "color": "orange",
-                "value": 46800
+                "value": 86400
               },
               {
                 "color": "red",
-                "value": 90000
+                "value": 129600
               }
             ]
           }
@@ -543,7 +543,7 @@
     {
       "type": "stat",
       "title": "Cost Explorer API cost",
-      "description": "What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.",
+      "description": "What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started. In report mode it grows only while a month has no report file yet.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -739,7 +739,7 @@
     {
       "type": "barchart",
       "title": "Daily spend by service",
-      "description": "Unblended cost per UTC day and service, this month and the three months before. Domain renewals and monthly tax post as one-day spikes. The latest days are estimates until Cost Explorer settles them.",
+      "description": "Unblended cost per UTC day and service, this month and the three months before. Domain renewals and monthly tax post as one-day spikes. The latest days may still change until the next delivery.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1073,7 +1073,7 @@
     {
       "type": "timeseries",
       "title": "AWS API requests per day",
-      "description": "Cost Explorer requests cost USD 0.01 each; AWS Budgets requests are free.",
+      "description": "Cost Explorer requests cost USD 0.01 each; S3 requests for the report and AWS Budgets requests cost nothing at this size.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

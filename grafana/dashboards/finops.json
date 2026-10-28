@@ -154,7 +154,7 @@
     {
       "type": "stat",
       "title": "AWS, month to date",
-      "description": "Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day.",
+      "description": "Unblended cost from the 1st (UTC) to now, today's partial cost included. The source lags by hours: the report lands up to three times a day.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -329,7 +329,7 @@
     {
       "type": "gauge",
       "title": "Forecast / budget",
-      "description": "Cost Explorer's month-end forecast against the MONTHLY budget in AWS Budgets. Red above 100%.",
+      "description": "Month-end forecast against the MONTHLY budget in AWS Budgets: the run rate of this month's complete days in report mode, Cost Explorer's forecast otherwise (the data row names the method). Red above 100%.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -717,7 +717,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Month to date per usage type, the finest grain Cost Explorer gives without a usage report. A usage type names the region, the instance size or the storage class.",
+      "description": "Month to date per usage type. A usage type names the region, the instance size or the storage class; the resources row below goes one grain finer.",
       "targets": [
         {
           "datasource": {
@@ -908,7 +908,7 @@
     },
     {
       "type": "row",
-      "title": "Anomalies",
+      "title": "Resources",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -918,6 +918,271 @@
         "h": 1
       },
       "id": 17
+    },
+    {
+      "type": "bargauge",
+      "title": "Top resources this month",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Month to date per resource and cost center, from the cost and usage report's line items: an instance, a volume, a bucket, a distribution, a hosted zone, a model. One resource can sit in two cost centers (an instance's hours in compute, its bytes out in data-transfer). '(none)' is the lines without a resource: tax, API requests. The data row counts the resources and sums the ones beyond the list. Empty until the report's first delivery.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sort_desc(topk(12, aws_cost_mtd_by_resource_usd))",
+          "refId": "A",
+          "legendFormat": "{{service}}: {{resource_id}} ({{cost_center}})",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 8,
+        "h": 10
+      },
+      "id": 18
+    },
+    {
+      "type": "barchart",
+      "title": "Daily spend by resource",
+      "description": "Per UTC day, the costliest resources of this month and last, a resource's services added up (an instance's hours and its bytes out). Empty until the report's first delivery.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (day, resource_id) (aws_cost_day_by_resource_usd)",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "resource_id",
+            "rowField": "day",
+            "valueField": "Value",
+            "emptyValue": "zero"
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "day\\resource_id"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "day\\resource_id",
+        "stacking": "normal",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 38,
+        "w": 8,
+        "h": 10
+      },
+      "id": 19
+    },
+    {
+      "type": "table",
+      "title": "Resources, latest day against their 28-day median",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "The latest complete UTC day per resource against the median of the 28 days before it, zero-filled. Orange from 1.5, red from 2. A new instance shows here first. Medians under USD 0.10 count as 0.10 in the ratio; a line first seen on the latest day has no ratio.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service, resource_id) (aws_cost_resource_latest_day_usd)",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service, resource_id) (aws_cost_resource_median_day_usd)",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service, resource_id) (aws_cost_resource_latest_day_usd) / clamp_min(max by (service, resource_id) (aws_cost_resource_median_day_usd), 0.1)",
+          "refId": "C",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "latest day",
+              "Value #B": "28-day median",
+              "Value #C": "ratio"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "ratio",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ratio"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1.5
+                    },
+                    {
+                      "color": "red",
+                      "value": 2
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 38,
+        "w": 8,
+        "h": 10
+      },
+      "id": 20
+    },
+    {
+      "type": "row",
+      "title": "Anomalies",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 1
+      },
+      "id": 21
     },
     {
       "type": "table",
@@ -1044,11 +1309,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 49,
         "w": 12,
         "h": 9
       },
-      "id": 18
+      "id": 22
     },
     {
       "type": "table",
@@ -1175,16 +1440,16 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 49,
         "w": 12,
         "h": 9
       },
-      "id": 19
+      "id": 23
     },
     {
       "type": "barchart",
       "title": "Daily total",
-      "description": "All services per UTC day; the 'true' column is the days Cost Explorer still marks as estimated.",
+      "description": "All services per UTC day; the 'true' column is the days that may still change: the ones the report's latest delivery still covers, or the ones Cost Explorer marks as estimated.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1250,11 +1515,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 58,
         "w": 24,
         "h": 8
       },
-      "id": 20
+      "id": 24
     },
     {
       "type": "row",
@@ -1263,16 +1528,16 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 66,
         "w": 24,
         "h": 1
       },
-      "id": 21
+      "id": 25
     },
     {
       "type": "stat",
       "title": "AWS cost per 1,000 searches, 7 days",
-      "description": "Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when Cost Explorer lags, the last of them possibly still an estimate) over the searches of the 7 days ending now: the two windows are up to a day apart. Everything on the box is in the numerator, so the figure is a ceiling.",
+      "description": "Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when the source lags) over the searches of the 7 days ending now: the two windows are up to a day apart. Everything on the box is in the numerator, so the figure is a ceiling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1307,11 +1572,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 67,
         "w": 6,
         "h": 5
       },
-      "id": 22
+      "id": 26
     },
     {
       "type": "stat",
@@ -1350,11 +1615,11 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 56,
+        "y": 67,
         "w": 6,
         "h": 5
       },
-      "id": 23
+      "id": 27
     },
     {
       "type": "stat",
@@ -1393,11 +1658,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 67,
         "w": 6,
         "h": 5
       },
-      "id": 24
+      "id": 28
     },
     {
       "type": "stat",
@@ -1437,11 +1702,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 56,
+        "y": 67,
         "w": 6,
         "h": 5
       },
-      "id": 25
+      "id": 29
     },
     {
       "type": "row",
@@ -1450,11 +1715,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 61,
+        "y": 72,
         "w": 24,
         "h": 1
       },
-      "id": 26
+      "id": 30
     },
     {
       "type": "text",
@@ -1465,11 +1730,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 73,
         "w": 24,
         "h": 4
       },
-      "id": 27
+      "id": 31
     },
     {
       "type": "row",
@@ -1478,11 +1743,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 77,
         "w": 24,
         "h": 1
       },
-      "id": 28
+      "id": 32
     },
     {
       "type": "gauge",
@@ -1538,11 +1803,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 78,
         "w": 4,
         "h": 5
       },
-      "id": 29
+      "id": 33
     },
     {
       "type": "stat",
@@ -1582,11 +1847,11 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 67,
+        "y": 78,
         "w": 3,
         "h": 5
       },
-      "id": 30
+      "id": 34
     },
     {
       "type": "stat",
@@ -1595,7 +1860,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day Cost Explorer has.",
+      "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day the source has (before the day the report's latest delivery may still change).",
       "targets": [
         {
           "datasource": {
@@ -1625,16 +1890,16 @@
       },
       "gridPos": {
         "x": 7,
-        "y": 67,
+        "y": 78,
         "w": 4,
         "h": 5
       },
-      "id": 31
+      "id": 35
     },
     {
       "type": "stat",
       "title": "Data age",
-      "description": "Time since the exporter last asked Cost Explorer for this month (every 12 h).",
+      "description": "Time since the report's latest delivery landed in S3 (up to three times a day; orange after a day), or, in Cost Explorer mode, since the exporter last asked for this month (every 12 h).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1645,7 +1910,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "time() - max(aws_cost_exporter_fetch_timestamp_seconds{part=\"current\"})",
+          "expr": "time() - (max(aws_cost_report_delivery_timestamp_seconds) or max(aws_cost_exporter_fetch_timestamp_seconds{part=\"current\"}))",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1664,7 +1929,7 @@
               },
               {
                 "color": "orange",
-                "value": 46800
+                "value": 86400
               }
             ]
           }
@@ -1682,16 +1947,16 @@
       },
       "gridPos": {
         "x": 11,
-        "y": 67,
+        "y": 78,
         "w": 3,
         "h": 5
       },
-      "id": 32
+      "id": 36
     },
     {
       "type": "stat",
       "title": "Latest day estimated",
-      "description": "Cost Explorer marks recent days as estimates until it settles them.",
+      "description": "Cost Explorer marks recent days as estimates until it settles them; in report mode the latest complete day lies before the days a delivery may still change, so this reads No.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1725,11 +1990,11 @@
       },
       "gridPos": {
         "x": 14,
-        "y": 67,
+        "y": 78,
         "w": 3,
         "h": 5
       },
-      "id": 33
+      "id": 37
     },
     {
       "type": "stat",
@@ -1782,16 +2047,16 @@
       },
       "gridPos": {
         "x": 17,
-        "y": 67,
+        "y": 78,
         "w": 4,
         "h": 5
       },
-      "id": 34
+      "id": 38
     },
     {
       "type": "stat",
       "title": "Cost of measuring",
-      "description": "What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.",
+      "description": "What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started. In report mode it only grows while a month has no report file yet (reading S3 is free at this size).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1826,11 +2091,233 @@
       },
       "gridPos": {
         "x": 21,
-        "y": 67,
+        "y": 78,
         "w": 3,
         "h": 5
       },
-      "id": 35
+      "id": 39
+    },
+    {
+      "type": "stat",
+      "title": "Source",
+      "description": "cur = the cost and usage report in S3; cost_explorer = the Cost Explorer API.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (source) (aws_cost_source_info)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "name"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 83,
+        "w": 3,
+        "h": 4
+      },
+      "id": 40
+    },
+    {
+      "type": "stat",
+      "title": "Forecast method",
+      "description": "run_rate = this month's complete days extended to month end; prior_month_rate = last month's daily mean when this month has no complete day yet; cost_explorer = Cost Explorer's forecast.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (method) (aws_cost_forecast_info)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{method}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "name"
+      },
+      "gridPos": {
+        "x": 3,
+        "y": 83,
+        "w": 3,
+        "h": 4
+      },
+      "id": 41
+    },
+    {
+      "type": "stat",
+      "title": "Resources this month",
+      "description": "Distinct (service, resource) pairs with a line this month in the report; '(none)' counts as one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(aws_cost_resources{period=\"this_month\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 83,
+        "w": 3,
+        "h": 4
+      },
+      "id": 42
+    },
+    {
+      "type": "stat",
+      "title": "Resources beyond the list",
+      "description": "Month to date of the resources the resource panels leave out (they show the costliest ones of this month and last).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(aws_cost_mtd_resource_rest_usd)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 9,
+        "y": 83,
+        "w": 3,
+        "h": 4
+      },
+      "id": 43
+    },
+    {
+      "type": "stat",
+      "title": "Report line items",
+      "description": "Line items read from the report's latest delivery, all billing periods in the cache.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(aws_cost_report_line_items)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 83,
+        "w": 3,
+        "h": 4
+      },
+      "id": 44
     }
   ],
   "links": [

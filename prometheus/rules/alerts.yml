@@ -110,9 +110,10 @@ groups:
         annotations:
           summary: 95th percentile search latency is above 8 s; an engine is hanging until its timeout.
 
-  # AWS spend from aws-cost-exporter: Cost Explorer every 12 h (forecast daily), AWS Budgets every 6 h.
+  # AWS spend from aws-cost-exporter: the cost and usage report in S3 (checked hourly, delivered up to
+  # three times a day) or Cost Explorer every 12 h (forecast daily); AWS Budgets every 6 h.
   # The budget is the MONTHLY budget in AWS Budgets; without one, the budget rules stay quiet.
-  # Cost Explorer lags by up to a day, so "latest day" is yesterday at best, and may be partial.
+  # The source lags by hours, so "latest day" is the latest complete UTC day: yesterday at best.
   - name: aws_cost
     rules:
       - alert: AWSCostForecastOverBudget
@@ -145,3 +146,15 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: The AWS cost exporter is not fetching from AWS (no success in 13 hours, or none since it started).
+      # Report mode only: the exporter keeps polling S3 and succeeding while no new delivery lands (a deleted
+      # report definition, a broken bucket policy, the billing service paused). Deliveries come up to three
+      # times a day; 36 hours without one is a fault. A report that has never delivered shows on the dashboard
+      # (no line items) and is not an alert.
+      - alert: AWSCostReportStale
+        expr: |
+          max(aws_cost_source_info{source="cur"}) == 1
+          and on() time() - max(aws_cost_report_delivery_timestamp_seconds) > 36 * 3600
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: The cost and usage report has not been delivered to S3 for 36 hours; the exporter serves the last delivery.

@@ -938,10 +938,11 @@ def expr_sum(title, parts, description, unit=USD, decimals=2):
 
 
 def aws_spend():
-    """AWS account spend from Cost Explorer and AWS Budgets (aws-cost-exporter).
+    """AWS account spend from the cost exporter (the cost and usage report in S3, or Cost Explorer)
+    and AWS Budgets.
 
-    Internal only: the panels show real spend and are never shared publicly. The exporter
-    fetches this month every 12 hours and Cost Explorer lags by up to a day, so this dashboard moves
+    Internal only: the panels show real spend and are never shared publicly. The report lands up to
+    three times a day (Cost Explorer: fetched every 12 hours, lagging a day), so this dashboard moves
     a few times a day. Day, month and service are labels on instant series, so the daily
     and monthly charts are instant queries pivoted with groupingToMatrix.
     """
@@ -952,28 +953,33 @@ def aws_spend():
     p = [
         L.row("This month"),
         L.place(stat("Month to date", "max(aws_cost_mtd_usd)", usd, decimals=2,
-                     description="Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day."), 4, 5),
+                     description="Unblended cost from the 1st (UTC) to now, today's partial cost included. The source lags by hours."), 4, 5),
         L.place(stat("Monthly budget", budget, usd, decimals=2,
                      description="The MONTHLY cost budget in AWS Budgets."), 4, 5),
         L.place(ratio_gauge("Month to date / budget", f"max(aws_cost_mtd_usd) / {budget}",
                             "Orange at 80% (AWSCostMonthToDateOver80), red at 100%."), 4, 5),
         L.place(stat("Forecast, month end", "max(aws_cost_month_forecast_usd)", usd, decimals=2,
-                     description="Actual days before the forecast's start plus Cost Explorer's forecast to the end of the month (forecast fetched daily)."), 4, 5),
+                     description="In report mode the run rate of this month's complete days to month end; in Cost Explorer mode the actual "
+                                 "days before the forecast's start plus Cost Explorer's forecast (fetched daily)."), 4, 5),
         L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
                             "Red above 100% (AWSCostForecastOverBudget)."), 4, 5),
         L.place(stat("AWS Budgets forecast", "max(aws_budget_forecast_usd)", usd, decimals=2,
-                     description="The forecast AWS Budgets calculates itself, as a cross-check of the Cost Explorer figure."), 4, 5),
+                     description="The forecast AWS Budgets calculates itself, as a cross-check of the exporter's figure."), 4, 5),
 
         L.place(stat("Latest day / 28-day median", "max(aws_cost_latest_day_usd) / max(aws_cost_trailing_median_day_usd)",
                      decimals=2, description="Latest UTC day before today against the median of the 28 days before it, both without domain "
                                              "renewals and tax. AWSCostDailySpike fires above 2 when the day is above USD 1."), 4, 4),
         L.place(stat("Latest day", "max(aws_cost_latest_day_usd)", usd, decimals=2,
-                     description="May be partial: Cost Explorer marks recent days as estimated."), 4, 4),
-        L.place(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no"), 4, 4),
-        L.place(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
-                     description="Time since the exporter last asked Cost Explorer for this month (every 12 h)."), 4, 4),
+                     description="The latest complete UTC day, without domain renewals and tax. In Cost Explorer mode it may still be an estimate."), 4, 4),
+        L.place(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no",
+                     description="Cost Explorer marks recent days as estimates; in report mode the latest complete day is settled by construction."), 4, 4),
+        L.place(stat("Data age", 'time() - (max(aws_cost_report_delivery_timestamp_seconds) or max(aws_cost_exporter_fetch_timestamp_seconds{part="current"}))',
+                     "s", decimals=0,
+                     description="Time since the report's latest delivery landed in S3 (up to three times a day), or since the exporter last "
+                                 "asked Cost Explorer for this month (every 12 h)."), 4, 4),
         L.place(stat("Cost Explorer API cost", "max(aws_cost_explorer_spend_usd_total)", usd, decimals=2,
-                     description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started."), 4, 4),
+                     description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started. In report "
+                                 "mode it grows only while a month has no report file yet."), 4, 4),
         L.place(stat("Exporter errors", "max(aws_cost_exporter_errors_total)", decimals=0,
                      description="Failed polls since the cache was created. The cache keeps serving the last good data."), 4, 4),
 
@@ -987,7 +993,7 @@ def aws_spend():
         L.row("Daily spend"),
         L.place(pivot_bars("Daily spend by service", "aws_cost_day_usd", "day", "service",
                            "Unblended cost per UTC day and service, this month and the three months before. Domain renewals "
-                           "and monthly tax post as one-day spikes. The latest days are estimates until Cost Explorer settles them."), 24, 10),
+                           "and monthly tax post as one-day spikes. The latest days may still change until the next delivery."), 24, 10),
 
         L.row("Services and months"),
     ]
@@ -1026,7 +1032,7 @@ def aws_spend():
                "fieldConfig": {"defaults": {"unit": usd, "decimals": 2}, "overrides": []},
                "options": {"showHeader": True}}
     p.append(L.place(budgets, 12, 8))
-    steps = {"Data age": [("green", None), ("orange", 13 * 3600), ("red", 25 * 3600)],
+    steps = {"Data age": [("green", None), ("orange", 24 * 3600), ("red", 36 * 3600)],
              "Latest day / 28-day median": [("green", None), ("orange", 1.5), ("red", 2)],
              "Exporter errors": [("green", None), ("red", 1)]}
     for panel in p:  # current-value panels read the latest sample; a 30-day range step would skip a young series
@@ -1042,10 +1048,11 @@ def aws_spend():
     p.append(L.row("Exporter"))
     p.append(L.place(timeseries("AWS API requests per day", [
         ("sum by (api) (increase(aws_cost_exporter_api_requests_total[1d]))", "{{api}}"),
-    ], description="Cost Explorer requests cost USD 0.01 each; AWS Budgets requests are free."), 24, 7))
+    ], description="Cost Explorer requests cost USD 0.01 each; S3 requests for the report and AWS Budgets requests cost nothing at this size."), 24, 7))
     return dashboard("aws-spend", "AWS spend",
-                     "AWS account spend from Cost Explorer and AWS Budgets: month to date and forecast against the "
-                     "monthly budget, daily spend by service, top services, the last three months. Internal; not shared.",
+                     "AWS account spend from the cost exporter (the cost and usage report in S3, or Cost Explorer) and AWS Budgets: "
+                     "month to date and forecast against the monthly budget, daily spend by service, top services, the last three "
+                     "months. Internal; not shared.",
                      p, refresh="15m", time_from="now-30d")
 
 
@@ -1056,11 +1063,14 @@ ANOMALY_FLOOR_USD = 0.1  # a median below this counts as this in the anomaly rat
 
 def finops():
     """One bill in the shape of a FinOps tool (Cloudability, Finout): the AWS account from the cost
-    exporter, the Claude Code API calls from Loki at their list price, and the fixed costs entered by
-    hand, with the account's cost split into cost centers by rule (virtual tags, since the account
-    carries no cost allocation tags), this month against the same days of last month, the services
-    and cost centers that moved most, per-service anomalies, unit costs over the business metrics the
-    stack already has, credits and tax by record type, and how much of the bill the rules explain.
+    exporter (the cost and usage report in S3, or Cost Explorer), the Claude Code API calls from Loki
+    at their list price, and the fixed costs entered by hand, with the account's cost split into cost
+    centers by rule (virtual tags; the cost allocation tag named in allocation.json settles a line
+    first once the account activates it), this month
+    against the same days of last month, the services and cost centers that moved most, the cost per
+    resource (instances, buckets, distributions: report mode only), per-service and per-resource
+    anomalies, unit costs over the business metrics the stack already has, credits and tax by record
+    type, and how much of the bill the rules explain.
 
     Internal: the panels show real spend and are never shared. The default range is this month to
     date, which the Claude Code sums follow; the AWS figures are instant series with day, month and
@@ -1110,11 +1120,12 @@ def finops():
                 "options": {"showHeader": True, "footer": {"show": True, "reducer": ["sum"], "fields": ""}}}
 
     def anomaly_table(title, metric_prefix, label, description):
-        """Latest day, 28-day median and their ratio per `label`. The ratio is PromQL, with the median
-        floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with no median (first seen
-        on the latest day) has an empty ratio cell rather than infinity."""
-        a = f"max by ({label}) ({metric_prefix}_latest_day_usd)"
-        b = f"max by ({label}) ({metric_prefix}_median_day_usd)"
+        """Latest day, 28-day median and their ratio per `label` (one name or several). The ratio is
+        PromQL, with the median floored at ANOMALY_FLOOR_USD so cents do not read as spikes; a key with
+        no median (first seen on the latest day) has an empty ratio cell rather than infinity."""
+        by = ", ".join((label,) if isinstance(label, str) else label)
+        a = f"max by ({by}) ({metric_prefix}_latest_day_usd)"
+        b = f"max by ({by}) ({metric_prefix}_median_day_usd)"
         return {"type": "table", "title": title, "datasource": PROM,
                 "description": description + f" Medians under USD {ANOMALY_FLOOR_USD:.2f} count as {ANOMALY_FLOOR_USD:.2f} in the ratio; "
                                              "a line first seen on the latest day has no ratio.",
@@ -1138,7 +1149,8 @@ def finops():
         return {"type": "text", "title": title, "options": {"mode": "markdown", "content": md}}
 
     latest_day = {"type": "stat", "title": "Latest complete day", "datasource": PROM,
-                  "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day Cost Explorer has.",
+                  "description": "The UTC day the anomaly tables and the latest-day stats describe: the last complete day the source has "
+                                 "(before the day the report's latest delivery may still change).",
                   "targets": [target("max by (day) (aws_cost_latest_day_info)", "{{day}}", instant=True, range=False)],
                   "fieldConfig": {"defaults": {}, "overrides": []},
                   "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "name", "colorMode": "none", "graphMode": "none"}}
@@ -1152,7 +1164,8 @@ def finops():
         ], "AWS month to date, plus the Claude Code API calls in the dashboard's range at their list price, plus the "
            "fixed costs entered in fixed-costs.json. Added server side from the three sources."), 5, 5),
         L.place(instant(stat("AWS, month to date", "max(aws_cost_mtd_usd)", USD, decimals=2,
-                             description="Unblended cost from the 1st (UTC) to now, today's partial cost included. Cost Explorer lags by up to a day.")), 4, 5),
+                             description="Unblended cost from the 1st (UTC) to now, today's partial cost included. The source lags by hours: "
+                                         "the report lands up to three times a day.")), 4, 5),
         L.place(instant(stat("Claude Code API calls, list price", cc_cost, USD, decimals=2, ds=LOKI,
                              description="What the API calls in the range would cost at list price, from Claude Code's own api_request "
                                          "events. The subscription covers them; the amount is what the subscription is worth this month.")), 5, 5),
@@ -1162,7 +1175,8 @@ def finops():
                              description="Complete days 1 to N of this month against days 1 to N of last month (N on the data row). "
                                          "Positive is up. A domain renewal or the monthly tax in one window and not the other shows here.")), 3, 5),
         L.place(ratio_gauge("Forecast / budget", f"max(aws_cost_month_forecast_usd) / {budget}",
-                            "Cost Explorer's month-end forecast against the MONTHLY budget in AWS Budgets. Red above 100%."), 3, 5),
+                            "Month-end forecast against the MONTHLY budget in AWS Budgets: the run rate of this month's complete days "
+                            "in report mode, Cost Explorer's forecast otherwise (the data row names the method). Red above 100%."), 3, 5),
 
         L.row("Cost centers (virtual tags)"),
         L.place(pivot_bars("Daily spend by cost center", "aws_cost_day_by_cost_center_usd", "day", "cost_center",
@@ -1178,12 +1192,26 @@ def finops():
 
         L.row("Where the money goes"),
         L.place(bars("Top usage types this month", "aws_cost_mtd_by_usage_type_usd", "{{service}}: {{usage_type}}",
-                     "Month to date per usage type, the finest grain Cost Explorer gives without a usage report. "
-                     "A usage type names the region, the instance size or the storage class.", limit=12), 8, 10),
+                     "Month to date per usage type. A usage type names the region, the instance size or the storage class; "
+                     "the resources row below goes one grain finer.", limit=12), 8, 10),
         L.place(pivot_bars("Months by cost center", "aws_cost_month_by_cost_center_usd", "month", "cost_center",
                            "Calendar months by cost center; the current month is to date."), 8, 10),
         L.place(pivot_bars("Months by record type", "aws_cost_month_record_usd", "month", "record_type",
                            "Usage, tax, credits and refunds per calendar month. Credits and refunds post as negative amounts."), 8, 10),
+
+        L.row("Resources"),
+        L.place(bars("Top resources this month", "aws_cost_mtd_by_resource_usd", "{{service}}: {{resource_id}} ({{cost_center}})",
+                     "Month to date per resource and cost center, from the cost and usage report's line items: an instance, a volume, "
+                     "a bucket, a distribution, a hosted zone, a model. One resource can sit in two cost centers (an instance's hours "
+                     "in compute, its bytes out in data-transfer). '(none)' is the lines without a resource: tax, API requests. "
+                     "The data row counts the resources and sums the ones beyond the list. Empty until the report's first delivery.",
+                     limit=12), 8, 10),
+        L.place(pivot_bars("Daily spend by resource", "sum by (day, resource_id) (aws_cost_day_by_resource_usd)", "day", "resource_id",
+                           "Per UTC day, the costliest resources of this month and last, a resource's services added up (an instance's "
+                           "hours and its bytes out). Empty until the report's first delivery."), 8, 10),
+        L.place(anomaly_table("Resources, latest day against their 28-day median", "aws_cost_resource", ("service", "resource_id"),
+                              "The latest complete UTC day per resource against the median of the 28 days before it, zero-filled. "
+                              "Orange from 1.5, red from 2. A new instance shows here first."), 8, 10),
 
         L.row("Anomalies"),
         L.place(anomaly_table("Services, latest day against their 28-day median", "aws_cost_service", "service",
@@ -1192,14 +1220,14 @@ def finops():
         L.place(anomaly_table("Cost centers, latest day against their 28-day median", "aws_cost_cost_center", "cost_center",
                               "Same test per cost center; here renewals and tax stay in, so 'domains-and-dns' and 'tax' spike by design on their day."), 12, 9),
         L.place(pivot_bars("Daily total", "aws_cost_day_total_usd", "day", "estimated",
-                           "All services per UTC day; the 'true' column is the days Cost Explorer still marks as estimated."), 24, 8),
+                           "All services per UTC day; the 'true' column is the days that may still change: the ones the report's "
+                           "latest delivery still covers, or the ones Cost Explorer marks as estimated."), 24, 8),
 
         L.row("Unit costs"),
         L.place(instant(stat("AWS cost per 1,000 searches, 7 days", f"({compute7}) / (sum(increase(searxng_searches_total[7d])) / 1000)", USD, decimals=2,
-                             description="Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when Cost "
-                                         "Explorer lags, the last of them possibly still an estimate) over the searches of the 7 days ending "
-                                         "now: the two windows are up to a day apart. Everything on the box is in the numerator, so the "
-                                         "figure is a ceiling.")), 6, 5),
+                             description="Compute and data transfer of the last 7 complete UTC days (ending yesterday, or earlier when the "
+                                         "source lags) over the searches of the 7 days ending now: the two windows are up to a day apart. "
+                                         "Everything on the box is in the numerator, so the figure is a ceiling.")), 6, 5),
         L.place(instant(stat("Claude Code cost per API call", f"{cc_cost} / sum(count_over_time({CC_REQUESTS} [{r}]))", USD, decimals=3, ds=LOKI,
                              description="List-price cost over the number of api_request events in the range.")), 6, 5),
         L.place(instant(stat("Claude Code cost per 1M output tokens", f"{cc_cost} / ({request_sum('output_tokens', r)} / 1e6)", USD, decimals=2, ds=LOKI,
@@ -1221,20 +1249,38 @@ def finops():
                              description="N in the this-month-against-last panels: complete days of this month so far, capped at the "
                                          "length of last month (28 or 29 at the end of March).")), 3, 5),
         L.place(latest_day, 4, 5),
-        L.place(instant(stat("Data age", 'time() - max(aws_cost_exporter_fetch_timestamp_seconds{part="current"})', "s", decimals=0,
-                             description="Time since the exporter last asked Cost Explorer for this month (every 12 h).")), 3, 5),
+        L.place(instant(stat("Data age", 'time() - (max(aws_cost_report_delivery_timestamp_seconds) or max(aws_cost_exporter_fetch_timestamp_seconds{part="current"}))',
+                             "s", decimals=0,
+                             description="Time since the report's latest delivery landed in S3 (up to three times a day; orange after a day), "
+                                         "or, in Cost Explorer mode, since the exporter last asked for this month (every 12 h).")), 3, 5),
         L.place(instant(stat("Latest day estimated", "max(aws_cost_latest_day_estimated)", "bool_yes_no",
-                             description="Cost Explorer marks recent days as estimates until it settles them.")), 3, 5),
+                             description="Cost Explorer marks recent days as estimates until it settles them; in report mode the latest "
+                                         "complete day lies before the days a delivery may still change, so this reads No.")), 3, 5),
         L.place(instant(stat("Fixed-cost items without a price", 'max(fixed_cost_items{state="unpriced"})', "short", decimals=0,
                              description="Items in the mounted fixed-costs file with amount_usd null. Enter the price and restart the exporter.")), 4, 5),
         L.place(instant(stat("Cost of measuring", "max(aws_cost_explorer_spend_usd_total)", USD, decimals=2,
-                             description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started.")), 3, 5),
+                             description="What this exporter's own Cost Explorer requests have cost, at USD 0.01 each, since it started. "
+                                         "In report mode it only grows while a month has no report file yet (reading S3 is free at this size).")), 3, 5),
+        L.place(instant(stat("Source", "max by (source) (aws_cost_source_info)", "none",
+                             description="cur = the cost and usage report in S3; cost_explorer = the Cost Explorer API.")), 3, 4),
+        L.place(instant(stat("Forecast method", "max by (method) (aws_cost_forecast_info)", "none",
+                             description="run_rate = this month's complete days extended to month end; prior_month_rate = last month's daily "
+                                         "mean when this month has no complete day yet; cost_explorer = Cost Explorer's forecast.")), 3, 4),
+        L.place(instant(stat("Resources this month", 'max(aws_cost_resources{period="this_month"})', "short", decimals=0,
+                             description="Distinct (service, resource) pairs with a line this month in the report; '(none)' counts as one.")), 3, 4),
+        L.place(instant(stat("Resources beyond the list", "max(aws_cost_mtd_resource_rest_usd)", USD, decimals=2,
+                             description="Month to date of the resources the resource panels leave out (they show the costliest ones of this month and last).")), 3, 4),
+        L.place(instant(stat("Report line items", "sum(aws_cost_report_line_items)", "short", decimals=0,
+                             description="Line items read from the report's latest delivery, all billing periods in the cache.")), 3, 4),
     ]
     for panel in p:
         if panel["type"] == "stat" and panel["title"] in ("Data age", "Fixed-cost items without a price"):
             panel["options"]["colorMode"] = "value"
             panel["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
-                {"color": "green", "value": None}, {"color": "orange", "value": 13 * 3600 if panel["title"] == "Data age" else 1}]}
+                {"color": "green", "value": None}, {"color": "orange", "value": 24 * 3600 if panel["title"] == "Data age" else 1}]}
+        if panel["type"] == "stat" and panel["title"] in ("Source", "Forecast method"):
+            panel["options"].update(textMode="name", colorMode="none", graphMode="none")
+            panel["targets"][0]["legendFormat"] = "{{source}}" if panel["title"] == "Source" else "{{method}}"
     return dashboard("finops", "FinOps: the bill",
                      "One bill in the shape of a FinOps tool: AWS from the cost exporter, Claude Code API calls from Loki at list "
                      "price, fixed costs by hand; cost centers by rule, this month against last, movers, anomalies, unit costs, "
