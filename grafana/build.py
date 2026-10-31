@@ -1218,6 +1218,18 @@ def finops():
             {"id": "calculateField", "filter": {"id": "byRefId", "options": "A"},
              "options": {"mode": "cumulativeFunctions", "cumulative": {"reducer": "sum"}, "alias": "List price",
                          "replaceFields": True}}])
+    def cache_ratio(window):
+        """Cache reads over all input tokens (fresh input, cache reads, cache writes) of the api_request events in `window`."""
+        read = request_sum("cache_read_tokens", window)
+        return f'{read} / ({request_sum("input_tokens", window)} + {read} + {request_sum("cache_creation_tokens", window)})'
+
+    cache_day = loki_series("Cache hit ratio per day", [(cache_ratio("$__interval"), "Cache hit ratio")], "percentunit", draw="bars",
+                            description="The same ratio per day. A drop follows a compaction, a new system prompt or a burst of fresh context; "
+                                        "a high, steady value means the sessions reuse what they have already read.")
+    cache_day["interval"] = "1d"
+    cache_day["fieldConfig"]["defaults"].update(min=0, max=1)
+    cache_day["options"]["legend"]["displayMode"] = "list"
+
     # Hours without a call have no row, so the line steps over them instead of breaking.
     through_month["fieldConfig"]["defaults"]["custom"].update(lineWidth=2, axisSoftMin=0, spanNulls=True,
                                                              lineInterpolation="stepAfter")
@@ -1278,6 +1290,14 @@ def finops():
                                      "would at list price; above 1x the plan is cheaper. Not shown until the plan has a price.",
                                      plan_needed=True)), 5, 5),
         L.place(through_month, 24, 9),
+
+        L.row("Cache efficiency"),
+        L.place(month_pin(no_colour(instant(stat(
+            "Cache hit ratio, month to date", cache_ratio(r), "percentunit", decimals=1, ds=LOKI,
+            description="Input tokens served from the prompt cache, over all input tokens (fresh input, cache reads and cache writes) of the "
+                        "Claude Code API calls since the first of the month. Long sessions re-read their context cheaply, which is what "
+                        "keeps the list price of a call low. Pinned to the calendar month in the browser's timezone.")))), 8, 8),
+        L.place(cache_day, 16, 8),
 
         L.row("Cost centers (virtual tags)"),
         L.place(pivot_bars("Daily spend by cost center", "aws_cost_day_by_cost_center_usd", "day", "cost_center",
@@ -1394,15 +1414,18 @@ def finops():
 
 
 def finops_public():
-    """Public cut of finops(): the AWS bill and what it is made of, no resource, fixed-cost or plan figure.
+    """Public cut of finops(): the AWS bill, the Claude plan against list price and the cache hit ratio.
 
     An allow-list by panel title, so a panel added to finops() stays internal until it is named here, and
     a renamed one fails the build instead of dropping out of the cut. Left out: the Resources row (its
     labels are instance ids, bucket names and ARNs), the fixed costs entered by hand and their unpriced
-    items (they name subscriptions and prices), the Claude plan row (a personal subscription price), the
-    resource counts in the data row and the commitments note. The panels that stay never read the fixed
-    costs: One bill is rebuilt as AWS plus the Claude Code API calls at list price, because the internal
-    one adds the fixed costs, and the AWS panel beside it would give the plan price away by subtraction.
+    items (they name other subscriptions and their prices), the resource counts in the data row and the
+    commitments note. The Claude plan price is public by Stefan's decision of 2026-10-31, so the plan row
+    and the cache row stay. The only fixed cost any kept panel reads is the Claude plan item: One bill is
+    rebuilt as AWS plus that item (the list price of the Claude Code API calls stands in while the item has
+    no price), because the internal one adds every fixed cost. The plan line of the chart reads the plan
+    through max_over_time instead of an @ modifier with a Grafana time variable: a public dashboard runs
+    the saved query on the server, which does not interpolate that variable.
     A few descriptions lose their pointers to the dropped panels. The labels that stay (cost center,
     service, usage type, record type, day, month) hold no identifier on 2026-10-31: the five panels that
     pass labels through name them in the query (shown_labels), the rest aggregate by label already, and
@@ -1411,6 +1434,11 @@ def finops_public():
     keep = {
         "The bill, this month": ["One bill", "AWS, month to date", "Claude Code API calls, list price",
                                  "AWS vs last month, same days", "Forecast / budget"],
+        "Claude plan against list price": ["Plan price this month", "List price, month to date",
+                                           "List price, month-end projection", "Projected savings this month",
+                                           "List price as a multiple of the plan",
+                                           "List price through the month against the plan"],
+        "Cache efficiency": ["Cache hit ratio, month to date", "Cache hit ratio per day"],
         "Cost centers (virtual tags)": ["Daily spend by cost center", "Cost centers, this month against last",
                                         "Top rises, by service", "Top falls, by service"],
         "Where the money goes": ["Top usage types this month", "Months by cost center", "Months by record type"],
@@ -1423,7 +1451,10 @@ def finops_public():
     }
     descriptions = {
         "Claude Code API calls, list price":
-            "What the API calls in the range would cost at list price, from Claude Code's own api_request events.",
+            "What the API calls in the range would cost at list price, from Claude Code's own api_request events. "
+            "The plan covers them; the bill counts the plan price, and the next row sets it against this figure.",
+        "Plan price this month":
+            "The monthly price of the Claude plan. It reads Not priced until the plan has a price.",
         "Top usage types this month":
             "Month to date per usage type. A usage type names the region, the instance size or the storage class.",
     }
@@ -1437,11 +1468,16 @@ def finops_public():
         "Months by record type": ("aws_cost_month_record_usd", "month, record_type"),
         "Daily total": ("aws_cost_day_total_usd", "day, estimated"),
     }
+    plan = f'fixed_cost_month_usd{{item="{CLAUDE_PLAN_ITEM}"}}'
     one_bill = expr_sum("One bill", [
         ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
         ("B", target(f'{request_sum("cost_usd", "$__range")} or vector(0)', ds=LOKI, queryType="instant")),
-    ], "AWS month to date plus the Claude Code API calls in the dashboard's range at their list price. "
-       "Nothing else is added. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series.")
+        ("C", target(f"max({plan}) or vector(0)", instant=True, range=False)),
+        ("D", target(f"clamp_max(count({plan}), 1) or vector(0)", instant=True, range=False)),
+    ], "AWS month to date plus the Claude plan price. The plan covers the Claude Code API calls, so their list price "
+       "is left out and shows in the next row for comparison; until the plan has a price, the list price stands in. "
+       "Nothing else is added. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series.",
+       math="$RA + $RC + (1 - $RD) * $RB")
     L = Layout()
     out, wanted, seen = [], None, set()
     for p in finops()["panels"]:
@@ -1456,6 +1492,10 @@ def finops_public():
         w, h = p["gridPos"]["w"], p["gridPos"]["h"]
         if p["title"] == "One bill":
             p = one_bill
+        if p["title"] == "List price through the month against the plan":
+            line = [t for t in p["targets"] if t["refId"] == "B"]
+            assert len(line) == 1 and "__to" in line[0]["expr"], "finops_public: the plan line of the chart changed"
+            line[0]["expr"] = f"max(max_over_time({plan}[1d]))"
         p["description"] = descriptions.get(p["title"], p.get("description", ""))
         if p["title"] in shown_labels:
             metric, labels = shown_labels[p["title"]]
@@ -1472,13 +1512,13 @@ def finops_public():
             if p["title"] not in shown_labels and (tg.get("format") == "table" or "{{" in tg.get("legendFormat", "")):
                 assert re.search(r"\bby \(", tg["expr"]), f"finops_public: {p['title']} shows labels without naming them"
     d = dashboard("finops-public", "FinOps: the bill, public",
-                  "The AWS bill in the shape of a FinOps tool, from the cost and usage report: this month against the same "
-                  "days of last month, the account's cost split into cost centers by rule, the services that moved most, "
-                  "usage types, usage, tax and credits by month, anomalies against a 28-day median, unit costs and how much "
-                  "of the bill the rules explain. The Claude Code API calls are at list price. AWS is the UTC calendar month "
-                  "to date.",
+                  "The AWS bill in the shape of a FinOps tool, from the cost and usage report, plus the Claude plan: this "
+                  "month against the same days of last month, the account's cost split into cost centers by rule, the "
+                  "services that moved most, usage types, usage, tax and credits by month, anomalies against a 28-day "
+                  "median, unit costs and how much of the bill the rules explain. The Claude plan is set against the list "
+                  "price of the Claude Code API calls, with the prompt-cache hit ratio. AWS is the UTC calendar month to date.",
                   out, refresh="15m", time_from="now/M")
-    leak = re.search(r"resource|fixed|subscription|\bplan\b|commitment|arn:|bucket|account[ _]?id", json.dumps(d), re.I)
+    leak = re.search(r"resource|fixed[ -]cost|local\.json|commitment|arn:|bucket|account[ _]?id", json.dumps(d), re.I)
     assert not leak, f"finops_public: '{leak.group(0)}' in the public JSON"
     return d
 

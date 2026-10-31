@@ -990,7 +990,7 @@
     },
     {
       "type": "row",
-      "title": "Cost centers (virtual tags)",
+      "title": "Cache efficiency",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -1000,6 +1000,121 @@
         "h": 1
       },
       "id": 15
+    },
+    {
+      "type": "stat",
+      "title": "Cache hit ratio, month to date",
+      "description": "Input tokens served from the prompt cache, over all input tokens (fresh input, cache reads and cache writes) of the Claude Code API calls since the first of the month. Long sessions re-read their context cheaply, which is what keeps the list price of a call low. Pinned to the calendar month in the browser's timezone.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) / (sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__range])))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 8,
+        "h": 8
+      },
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache hit ratio per day",
+      "description": "The same ratio per day. A drop follows a compaction, a new system prompt or a burst of fresh context; a high, steady value means the sessions reuse what they have already read.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__interval])) / (sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__interval])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__interval])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__interval])))",
+          "refId": "A",
+          "legendFormat": "Cache hit ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1d",
+      "gridPos": {
+        "x": 8,
+        "y": 22,
+        "w": 16,
+        "h": 8
+      },
+      "id": 17
+    },
+    {
+      "type": "row",
+      "title": "Cost centers (virtual tags)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "id": 18
     },
     {
       "type": "barchart",
@@ -1070,11 +1185,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 31,
         "w": 24,
         "h": 10
       },
-      "id": 16
+      "id": 19
     },
     {
       "type": "table",
@@ -1201,11 +1316,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 41,
         "w": 12,
         "h": 9
       },
-      "id": 17
+      "id": 20
     },
     {
       "type": "bargauge",
@@ -1247,11 +1362,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 32,
+        "y": 41,
         "w": 6,
         "h": 9
       },
-      "id": 18
+      "id": 21
     },
     {
       "type": "bargauge",
@@ -1293,11 +1408,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 32,
+        "y": 41,
         "w": 6,
         "h": 9
       },
-      "id": 19
+      "id": 22
     },
     {
       "type": "row",
@@ -1306,11 +1421,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 50,
         "w": 24,
         "h": 1
       },
-      "id": 20
+      "id": 23
     },
     {
       "type": "bargauge",
@@ -1352,11 +1467,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 21
+      "id": 24
     },
     {
       "type": "barchart",
@@ -1427,11 +1542,11 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 22
+      "id": 25
     },
     {
       "type": "barchart",
@@ -1502,11 +1617,11 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 23
+      "id": 26
     },
     {
       "type": "row",
@@ -1515,11 +1630,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 61,
         "w": 24,
         "h": 1
       },
-      "id": 24
+      "id": 27
     },
     {
       "type": "bargauge",
@@ -1561,11 +1676,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 62,
         "w": 8,
         "h": 10
       },
-      "id": 25
+      "id": 28
     },
     {
       "type": "barchart",
@@ -1636,11 +1751,11 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 53,
+        "y": 62,
         "w": 8,
         "h": 10
       },
-      "id": 26
+      "id": 29
     },
     {
       "type": "table",
@@ -1767,11 +1882,11 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 53,
+        "y": 62,
         "w": 8,
         "h": 10
       },
-      "id": 27
+      "id": 30
     },
     {
       "type": "row",
@@ -1780,11 +1895,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 72,
         "w": 24,
         "h": 1
       },
-      "id": 28
+      "id": 31
     },
     {
       "type": "table",
@@ -1911,11 +2026,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 73,
         "w": 12,
         "h": 9
       },
-      "id": 29
+      "id": 32
     },
     {
       "type": "table",
@@ -2042,11 +2157,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 64,
+        "y": 73,
         "w": 12,
         "h": 9
       },
-      "id": 30
+      "id": 33
     },
     {
       "type": "barchart",
@@ -2117,11 +2232,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 82,
         "w": 24,
         "h": 8
       },
-      "id": 31
+      "id": 34
     },
     {
       "type": "row",
@@ -2130,11 +2245,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 81,
+        "y": 90,
         "w": 24,
         "h": 1
       },
-      "id": 32
+      "id": 35
     },
     {
       "type": "stat",
@@ -2174,11 +2289,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 91,
         "w": 6,
         "h": 5
       },
-      "id": 33
+      "id": 36
     },
     {
       "type": "stat",
@@ -2217,11 +2332,11 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 82,
+        "y": 91,
         "w": 6,
         "h": 5
       },
-      "id": 34
+      "id": 37
     },
     {
       "type": "stat",
@@ -2260,11 +2375,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 82,
+        "y": 91,
         "w": 6,
         "h": 5
       },
-      "id": 35
+      "id": 38
     },
     {
       "type": "stat",
@@ -2304,11 +2419,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 82,
+        "y": 91,
         "w": 6,
         "h": 5
       },
-      "id": 36
+      "id": 39
     },
     {
       "type": "row",
@@ -2317,11 +2432,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 87,
+        "y": 96,
         "w": 24,
         "h": 1
       },
-      "id": 37
+      "id": 40
     },
     {
       "type": "text",
@@ -2332,11 +2447,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 97,
         "w": 24,
         "h": 4
       },
-      "id": 38
+      "id": 41
     },
     {
       "type": "row",
@@ -2345,11 +2460,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 92,
+        "y": 101,
         "w": 24,
         "h": 1
       },
-      "id": 39
+      "id": 42
     },
     {
       "type": "gauge",
@@ -2405,11 +2520,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 93,
+        "y": 102,
         "w": 4,
         "h": 5
       },
-      "id": 40
+      "id": 43
     },
     {
       "type": "stat",
@@ -2449,11 +2564,11 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 93,
+        "y": 102,
         "w": 3,
         "h": 5
       },
-      "id": 41
+      "id": 44
     },
     {
       "type": "stat",
@@ -2492,11 +2607,11 @@
       },
       "gridPos": {
         "x": 7,
-        "y": 93,
+        "y": 102,
         "w": 4,
         "h": 5
       },
-      "id": 42
+      "id": 45
     },
     {
       "type": "stat",
@@ -2549,11 +2664,11 @@
       },
       "gridPos": {
         "x": 11,
-        "y": 93,
+        "y": 102,
         "w": 3,
         "h": 5
       },
-      "id": 43
+      "id": 46
     },
     {
       "type": "stat",
@@ -2592,11 +2707,11 @@
       },
       "gridPos": {
         "x": 14,
-        "y": 93,
+        "y": 102,
         "w": 3,
         "h": 5
       },
-      "id": 44
+      "id": 47
     },
     {
       "type": "stat",
@@ -2649,11 +2764,11 @@
       },
       "gridPos": {
         "x": 17,
-        "y": 93,
+        "y": 102,
         "w": 4,
         "h": 5
       },
-      "id": 45
+      "id": 48
     },
     {
       "type": "stat",
@@ -2693,11 +2808,11 @@
       },
       "gridPos": {
         "x": 21,
-        "y": 93,
+        "y": 102,
         "w": 3,
         "h": 5
       },
-      "id": 46
+      "id": 49
     },
     {
       "type": "stat",
@@ -2738,11 +2853,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 98,
+        "y": 107,
         "w": 3,
         "h": 4
       },
-      "id": 47
+      "id": 50
     },
     {
       "type": "stat",
@@ -2783,11 +2898,11 @@
       },
       "gridPos": {
         "x": 3,
-        "y": 98,
+        "y": 107,
         "w": 3,
         "h": 4
       },
-      "id": 48
+      "id": 51
     },
     {
       "type": "stat",
@@ -2827,11 +2942,11 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 98,
+        "y": 107,
         "w": 3,
         "h": 4
       },
-      "id": 49
+      "id": 52
     },
     {
       "type": "stat",
@@ -2871,11 +2986,11 @@
       },
       "gridPos": {
         "x": 9,
-        "y": 98,
+        "y": 107,
         "w": 3,
         "h": 4
       },
-      "id": 50
+      "id": 53
     },
     {
       "type": "stat",
@@ -2915,11 +3030,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 98,
+        "y": 107,
         "w": 3,
         "h": 4
       },
-      "id": 51
+      "id": 54
     }
   ],
   "links": [
