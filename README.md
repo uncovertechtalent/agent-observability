@@ -215,7 +215,7 @@ blackbox/blackbox.yml            blackbox modules: icmp, dns_a, tcp_connect
 prometheus/tests/                promtool unit tests
 loki/ tempo/                     single-binary configs, 90-day and 14-day retention
 loki/rules/                      Loki ruler: Claude Code hourly cost for the spend alert
-grafana/build.py                 dashboards as code
+grafana/build.py                 dashboards as code; test_build.py (offline test of the public FinOps cut's guards)
 grafana/dashboards/              generated JSON, provisioned read-only
 ollama-exporter/                 the metering proxy
 deploy-exporter/                 website deploy runs from GitHub Actions

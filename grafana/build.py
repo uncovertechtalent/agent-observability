@@ -435,6 +435,12 @@ def spend_alert_state():
     }
 
 
+def cache_ratio(window):
+    """Cache reads over all input tokens (fresh input, cache reads, cache writes) of the api_request events in `window`."""
+    read = request_sum("cache_read_tokens", window)
+    return f'{read} / ({request_sum("input_tokens", window)} + {read} + {request_sum("cache_creation_tokens", window)})'
+
+
 def request_sum(field, window, by=(), where=""):
     """Sum of one field of Claude Code's api_request events over `window` (LogQL).
 
@@ -458,8 +464,7 @@ def claude_code():
     L = Layout()
     ev = CC_EVENTS
     r = "$__range"
-    cache_share = (f"{request_sum('cache_read_tokens', r)} / ({request_sum('input_tokens', r)} + "
-                   f"{request_sum('cache_read_tokens', r)} + {request_sum('cache_creation_tokens', r)})")
+    cache_share = cache_ratio(r)
     cost_hour = loki_series("Cost per hour by model", [
         (request_sum("cost_usd", "1h", ("model",)), "{{model}}"),
     ], "currencyUSD", stack=True,
@@ -1218,11 +1223,6 @@ def finops():
             {"id": "calculateField", "filter": {"id": "byRefId", "options": "A"},
              "options": {"mode": "cumulativeFunctions", "cumulative": {"reducer": "sum"}, "alias": "List price",
                          "replaceFields": True}}])
-    def cache_ratio(window):
-        """Cache reads over all input tokens (fresh input, cache reads, cache writes) of the api_request events in `window`."""
-        read = request_sum("cache_read_tokens", window)
-        return f'{read} / ({request_sum("input_tokens", window)} + {read} + {request_sum("cache_creation_tokens", window)})'
-
     cache_day = loki_series("Cache hit ratio per day", [(cache_ratio("$__interval"), "Cache hit ratio")], "percentunit", draw="bars",
                             description="The same ratio per day. A drop follows a compaction, a new system prompt or a burst of fresh context; "
                                         "a high, steady value means the sessions reuse what they have already read.")
@@ -1518,6 +1518,11 @@ def finops_public():
                   "median, unit costs and how much of the bill the rules explain. The Claude plan is set against the list "
                   "price of the Claude Code API calls, with the prompt-cache hit ratio. AWS is the UTC calendar month to date.",
                   out, refresh="15m", time_from="now/M")
+    for p in out:
+        for tg in p.get("targets", []):
+            for m in re.finditer(r"fixed_cost\w*", tg.get("expr", "")):
+                assert tg["expr"].startswith('{item="%s"}' % CLAUDE_PLAN_ITEM, m.end()), \
+                    f"finops_public: {p['title']} reads a fixed cost other than the Claude plan"
     leak = re.search(r"resource|fixed[ -]cost|local\.json|commitment|arn:|bucket|account[ _]?id", json.dumps(d), re.I)
     assert not leak, f"finops_public: '{leak.group(0)}' in the public JSON"
     return d
