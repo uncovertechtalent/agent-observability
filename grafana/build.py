@@ -1463,6 +1463,12 @@ def finops_public():
         out.append(L.place(p, w, h))
     missing = {t for ts in keep.values() for t in ts} - seen
     assert not missing, f"finops_public: panels not found in finops(): {sorted(missing)}"
+    # A kept panel that shows per-series labels (a legend template, a table) must name them in shown_labels or
+    # aggregate by label in its own query; a panel added to `keep` and forgotten fails here.
+    for p in out:
+        for tg in p.get("targets", []):
+            if p["title"] not in shown_labels and (tg.get("format") == "table" or "{{" in tg.get("legendFormat", "")):
+                assert re.search(r"\bby \(", tg["expr"]), f"finops_public: {p['title']} shows labels without naming them"
     d = dashboard("finops-public", "FinOps: the bill, public",
                   "The AWS bill in the shape of a FinOps tool, from the cost and usage report: this month against the same "
                   "days of last month, the account's cost split into cost centers by rule, the services that moved most, "
@@ -1470,7 +1476,7 @@ def finops_public():
                   "of the bill the rules explain. The Claude Code API calls are at list price. AWS is the UTC calendar month "
                   "to date.",
                   out, refresh="15m", time_from="now/M")
-    leak = re.search(r"resource|fixed|subscription|\bplan\b|commitment|arn:|bucket|account id", json.dumps(d), re.I)
+    leak = re.search(r"resource|fixed|subscription|\bplan\b|commitment|arn:|bucket|account[ _]?id", json.dumps(d), re.I)
     assert not leak, f"finops_public: '{leak.group(0)}' in the public JSON"
     return d
 
