@@ -1402,8 +1402,9 @@ def finops_public():
     costs: One bill is rebuilt as AWS plus the Claude Code API calls at list price, because the internal
     one adds the fixed costs, and the AWS panel beside it would give the plan price away by subtraction.
     A few descriptions lose their pointers to the dropped panels. The labels that stay (cost center,
-    service, usage type, record type, day, month) hold no identifier, and the assertion at the end
-    keeps the words of the dropped panels out of the JSON.
+    service, usage type, record type, day, month) hold no identifier on 2026-10-31: the five panels that
+    pass labels through name them in the query (shown_labels), the rest aggregate by label already, and
+    the assertion at the end keeps the words of the dropped panels out of the JSON.
     """
     keep = {
         "The bill, this month": ["One bill", "AWS, month to date", "Claude Code API calls, list price",
@@ -1423,6 +1424,16 @@ def finops_public():
             "What the API calls in the range would cost at list price, from Claude Code's own api_request events.",
         "Top usage types this month":
             "Month to date per usage type. A usage type names the region, the instance size or the storage class.",
+    }
+    # The panels that pass a metric's labels straight through (a bar chart column, a legend) name the labels they
+    # may show, so a label added to the exporter later reaches no viewer: the label values are read at view time,
+    # which the check on the JSON at the end cannot see.
+    shown_labels = {
+        "Daily spend by cost center": ("aws_cost_day_by_cost_center_usd", "day, cost_center"),
+        "Top usage types this month": ("aws_cost_mtd_by_usage_type_usd", "service, usage_type, cost_center"),
+        "Months by cost center": ("aws_cost_month_by_cost_center_usd", "month, cost_center"),
+        "Months by record type": ("aws_cost_month_record_usd", "month, record_type"),
+        "Daily total": ("aws_cost_day_total_usd", "day, estimated"),
     }
     one_bill = expr_sum("One bill", [
         ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
@@ -1444,6 +1455,11 @@ def finops_public():
         if p["title"] == "One bill":
             p = one_bill
         p["description"] = descriptions.get(p["title"], p.get("description", ""))
+        if p["title"] in shown_labels:
+            metric, labels = shown_labels[p["title"]]
+            expr = p["targets"][0]["expr"]
+            assert expr.count(metric) == 1, f"finops_public: {metric} not once in the query of {p['title']}"
+            p["targets"][0]["expr"] = expr.replace(metric, f"max by ({labels}) ({metric})")
         out.append(L.place(p, w, h))
     missing = {t for ts in keep.values() for t in ts} - seen
     assert not missing, f"finops_public: panels not found in finops(): {sorted(missing)}"

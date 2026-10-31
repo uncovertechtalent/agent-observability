@@ -343,7 +343,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aws_cost_day_by_cost_center_usd",
+          "expr": "max by (day, cost_center) (aws_cost_day_by_cost_center_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -654,7 +654,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sort_desc(topk(12, aws_cost_mtd_by_usage_type_usd))",
+          "expr": "sort_desc(topk(12, max by (service, usage_type, cost_center) (aws_cost_mtd_by_usage_type_usd)))",
           "refId": "A",
           "legendFormat": "{{service}}: {{usage_type}}",
           "instant": true
@@ -700,7 +700,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aws_cost_month_by_cost_center_usd",
+          "expr": "max by (month, cost_center) (aws_cost_month_by_cost_center_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -775,7 +775,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aws_cost_month_record_usd",
+          "expr": "max by (month, record_type) (aws_cost_month_record_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -1125,7 +1125,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "aws_cost_day_total_usd",
+          "expr": "max by (day, estimated) (aws_cost_day_total_usd)",
           "refId": "A",
           "format": "table",
           "instant": true
