@@ -924,8 +924,10 @@ def expr_sum(title, parts, description, unit=USD, decimals=2, math=None):
     `math` replaces the sum with another Grafana math expression over the reduced values ($RA, $RB, ...).
     Each query ends in `or vector(0)`, so a source with no data in the range is a zero rather than
     a missing operand (a reduce over an empty result returns nothing, and the math then returns
-    nothing); the reduce's replaceNN turns a NaN into zero. Checked on 2026-10-27 over a range
-    with no data in any source: the sum read 0.
+    nothing); the reduce's replaceNN turns a NaN into zero. A Loki query with `or vector(0)` is
+    refused over a window longer than Loki's max_query_length (30d1h by default), which the month
+    to date passes on the last day of a 31-day month: loki/loki.yml raises the limit to 32d.
+    Checked on 2026-10-27 over a range with no data in any source: the sum read 0.
     """
     targets = []
     for ref, t in parts:
