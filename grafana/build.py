@@ -6,6 +6,7 @@ repo stays the source of truth and UI edits cannot drift from it.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1077,7 +1078,8 @@ def finops():
     anomalies, unit costs over the business metrics the stack already has, credits and tax by record
     type, and how much of the bill the rules explain.
 
-    Internal: the panels show real spend and are never shared. The default range is this month to
+    Internal: the panels show real spend, fixed-cost prices and resource ids, so this one is never
+    shared; finops_public() is the cut to share. The default range is this month to
     date, which the Claude Code sums follow; the AWS figures are instant series with day, month and
     cost center labels, so they do not move with the range. Prometheus keeps 90 days.
     """
@@ -1389,6 +1391,96 @@ def finops():
                      p, refresh="15m", time_from="now/M")
 
 
+def finops_public():
+    """Public cut of finops(): the AWS bill and what it is made of, no resource, fixed-cost or plan figure.
+
+    An allow-list by panel title, so a panel added to finops() stays internal until it is named here, and
+    a renamed one fails the build instead of dropping out of the cut. Left out: the Resources row (its
+    labels are instance ids, bucket names and ARNs), the fixed costs entered by hand and their unpriced
+    items (they name subscriptions and prices), the Claude plan row (a personal subscription price), the
+    resource counts in the data row and the commitments note. The panels that stay never read the fixed
+    costs: One bill is rebuilt as AWS plus the Claude Code API calls at list price, because the internal
+    one adds the fixed costs, and the AWS panel beside it would give the plan price away by subtraction.
+    A few descriptions lose their pointers to the dropped panels. The labels that stay (cost center,
+    service, usage type, record type, day, month) hold no identifier on 2026-10-31: the five panels that
+    pass labels through name them in the query (shown_labels), the rest aggregate by label already, and
+    the assertion at the end keeps the words of the dropped panels out of the JSON.
+    """
+    keep = {
+        "The bill, this month": ["One bill", "AWS, month to date", "Claude Code API calls, list price",
+                                 "AWS vs last month, same days", "Forecast / budget"],
+        "Cost centers (virtual tags)": ["Daily spend by cost center", "Cost centers, this month against last",
+                                        "Top rises, by service", "Top falls, by service"],
+        "Where the money goes": ["Top usage types this month", "Months by cost center", "Months by record type"],
+        "Anomalies": ["Services, latest day against their 28-day median",
+                      "Cost centers, latest day against their 28-day median", "Daily total"],
+        "Unit costs": ["AWS cost per 1,000 searches, 7 days", "Claude Code cost per API call",
+                       "Claude Code cost per 1M output tokens", "Searches, 7 days"],
+        "Data": ["Allocated share", "Days compared", "Latest complete day", "Data age", "Latest day estimated",
+                 "Cost of measuring", "Source", "Forecast method", "Report line items"],
+    }
+    descriptions = {
+        "Claude Code API calls, list price":
+            "What the API calls in the range would cost at list price, from Claude Code's own api_request events.",
+        "Top usage types this month":
+            "Month to date per usage type. A usage type names the region, the instance size or the storage class.",
+    }
+    # The panels that pass a metric's labels straight through (a bar chart column, a legend) name the labels they
+    # may show, so a label added to the exporter later reaches no viewer: the label values are read at view time,
+    # which the check on the JSON at the end cannot see.
+    shown_labels = {
+        "Daily spend by cost center": ("aws_cost_day_by_cost_center_usd", "day, cost_center"),
+        "Top usage types this month": ("aws_cost_mtd_by_usage_type_usd", "service, usage_type, cost_center"),
+        "Months by cost center": ("aws_cost_month_by_cost_center_usd", "month, cost_center"),
+        "Months by record type": ("aws_cost_month_record_usd", "month, record_type"),
+        "Daily total": ("aws_cost_day_total_usd", "day, estimated"),
+    }
+    one_bill = expr_sum("One bill", [
+        ("A", target("max(aws_cost_mtd_usd) or vector(0)", instant=True, range=False)),
+        ("B", target(f'{request_sum("cost_usd", "$__range")} or vector(0)', ds=LOKI, queryType="instant")),
+    ], "AWS month to date plus the Claude Code API calls in the dashboard's range at their list price. "
+       "Nothing else is added. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series.")
+    L = Layout()
+    out, wanted, seen = [], None, set()
+    for p in finops()["panels"]:
+        if p["type"] == "row":
+            wanted = keep.get(p["title"])
+            if wanted is not None:
+                out.append(L.row(p["title"]))
+            continue
+        if wanted is None or p["title"] not in wanted:
+            continue
+        seen.add(p["title"])
+        w, h = p["gridPos"]["w"], p["gridPos"]["h"]
+        if p["title"] == "One bill":
+            p = one_bill
+        p["description"] = descriptions.get(p["title"], p.get("description", ""))
+        if p["title"] in shown_labels:
+            metric, labels = shown_labels[p["title"]]
+            expr = p["targets"][0]["expr"]
+            assert expr.count(metric) == 1, f"finops_public: {metric} not once in the query of {p['title']}"
+            p["targets"][0]["expr"] = expr.replace(metric, f"max by ({labels}) ({metric})")
+        out.append(L.place(p, w, h))
+    missing = {t for ts in keep.values() for t in ts} - seen
+    assert not missing, f"finops_public: panels not found in finops(): {sorted(missing)}"
+    # A kept panel that shows per-series labels (a legend template, a table) must name them in shown_labels or
+    # aggregate by label in its own query; a panel added to `keep` and forgotten fails here.
+    for p in out:
+        for tg in p.get("targets", []):
+            if p["title"] not in shown_labels and (tg.get("format") == "table" or "{{" in tg.get("legendFormat", "")):
+                assert re.search(r"\bby \(", tg["expr"]), f"finops_public: {p['title']} shows labels without naming them"
+    d = dashboard("finops-public", "FinOps: the bill, public",
+                  "The AWS bill in the shape of a FinOps tool, from the cost and usage report: this month against the same "
+                  "days of last month, the account's cost split into cost centers by rule, the services that moved most, "
+                  "usage types, usage, tax and credits by month, anomalies against a 28-day median, unit costs and how much "
+                  "of the bill the rules explain. The Claude Code API calls are at list price. AWS is the UTC calendar month "
+                  "to date.",
+                  out, refresh="15m", time_from="now/M")
+    leak = re.search(r"resource|fixed|subscription|\bplan\b|commitment|arn:|bucket|account[ _]?id", json.dumps(d), re.I)
+    assert not leak, f"finops_public: '{leak.group(0)}' in the public JSON"
+    return d
+
+
 # ---------------------------------------------------------------- site traffic
 
 def site_traffic(public=False):
@@ -1587,7 +1679,7 @@ def agent_tool_calls():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), site_traffic(), site_traffic(public=True), agent_tool_calls()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), agent_tool_calls()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
