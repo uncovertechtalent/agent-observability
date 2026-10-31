@@ -1,7 +1,7 @@
 {
   "uid": "finops-public",
   "title": "FinOps: the bill, public",
-  "description": "The AWS bill in the shape of a FinOps tool, from the cost and usage report: this month against the same days of last month, the account's cost split into cost centers by rule, the services that moved most, usage types, usage, tax and credits by month, anomalies against a 28-day median, unit costs and how much of the bill the rules explain. The Claude Code API calls are at list price. AWS is the UTC calendar month to date.",
+  "description": "The AWS bill in the shape of a FinOps tool, from the cost and usage report, plus the Claude plan: this month against the same days of last month, the account's cost split into cost centers by rule, the services that moved most, usage types, usage, tax and credits by month, anomalies against a 28-day median, unit costs and how much of the bill the rules explain. The Claude plan is set against the list price of the Claude Code API calls, with the prompt-cache hit ratio. AWS is the UTC calendar month to date.",
   "tags": [
     "agent-observability"
   ],
@@ -34,7 +34,7 @@
     {
       "type": "stat",
       "title": "One bill",
-      "description": "AWS month to date plus the Claude Code API calls in the dashboard's range at their list price. Nothing else is added. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series.",
+      "description": "AWS month to date plus the Claude plan price. The plan covers the Claude Code API calls, so their list price is left out and shows in the next row for comparison; until the plan has a price, the list price stands in. Nothing else is added. Added server side with a Grafana expression: PromQL's or cannot reach the Loki series.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -93,12 +93,64 @@
         },
         {
           "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(fixed_cost_month_usd{item=\"Claude subscription\"}) or vector(0)",
+          "refId": "C",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RC",
+          "type": "reduce",
+          "expression": "C",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "clamp_max(count(fixed_cost_month_usd{item=\"Claude subscription\"}), 1) or vector(0)",
+          "refId": "D",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RD",
+          "type": "reduce",
+          "expression": "D",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
             "type": "__expr__",
             "uid": "__expr__"
           },
           "refId": "SUM",
           "type": "math",
-          "expression": "$RA + $RB"
+          "expression": "$RA + $RC + (1 - $RD) * $RB"
         }
       ],
       "fieldConfig": {
@@ -172,7 +224,7 @@
     {
       "type": "stat",
       "title": "Claude Code API calls, list price",
-      "description": "What the API calls in the range would cost at list price, from Claude Code's own api_request events.",
+      "description": "What the API calls in the range would cost at list price, from Claude Code's own api_request events. The plan covers them; the bill counts the plan price, and the next row sets it against this figure.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -318,7 +370,7 @@
     },
     {
       "type": "row",
-      "title": "Cost centers (virtual tags)",
+      "title": "Claude plan against list price",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -328,6 +380,697 @@
         "h": 1
       },
       "id": 7
+    },
+    {
+      "type": "stat",
+      "title": "Plan price this month",
+      "description": "The monthly price of the Claude plan. It reads Not priced until the plan has a price.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(fixed_cost_month_usd{item=\"Claude subscription\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "Not priced"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 4,
+        "h": 5
+      },
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "List price, month to date",
+      "description": "What the Claude Code API calls since the first of the month would cost at list price. List price is what Claude Code reports per call (cost_usd on its api_request events, summed in Loki). The panel is pinned to the calendar month in the browser's timezone, whatever range the dashboard shows.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 4,
+        "y": 7,
+        "w": 5,
+        "h": 5
+      },
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "List price, month-end projection",
+      "description": "Month-to-date list price divided by the days elapsed, times the days in the month. It is a run rate: it assumes the rest of the month looks like the days so far, and it counts the first day of the month as a whole day. List price is what Claude Code reports per call, from its api_request events in Loki.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range])) or vector(0)",
+          "refId": "A",
+          "queryType": "instant",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RA",
+          "type": "reduce",
+          "expression": "A",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "days_in_month(vector(time())) * 86400 / clamp_min(vector($__range_s), 86400)",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RB",
+          "type": "reduce",
+          "expression": "B",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "SUM",
+          "type": "math",
+          "expression": "$RA * $RB"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "Not priced"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 9,
+        "y": 7,
+        "w": 5,
+        "h": 5
+      },
+      "id": 10
+    },
+    {
+      "type": "stat",
+      "title": "Projected savings this month",
+      "description": "Projected month-end list price minus the plan price: what the plan saves against paying per call, as a run rate. Negative means the plan costs more than the calls would at list price. Not shown until the plan has a price.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range])) or vector(0)",
+          "refId": "A",
+          "queryType": "instant",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RA",
+          "type": "reduce",
+          "expression": "A",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "days_in_month(vector(time())) * 86400 / clamp_min(vector($__range_s), 86400)",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RB",
+          "type": "reduce",
+          "expression": "B",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(fixed_cost_month_usd{item=\"Claude subscription\"})",
+          "refId": "P",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RP",
+          "type": "reduce",
+          "expression": "P",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "SUM",
+          "type": "math",
+          "expression": "$RA * $RB - $RP"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "Not priced"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 14,
+        "y": 7,
+        "w": 5,
+        "h": 5
+      },
+      "id": 11
+    },
+    {
+      "type": "stat",
+      "title": "List price as a multiple of the plan",
+      "description": "Projected month-end list price divided by the plan price. 1x means the plan costs what the calls would at list price; above 1x the plan is cheaper. Not shown until the plan has a price.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__range])) or vector(0)",
+          "refId": "A",
+          "queryType": "instant",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RA",
+          "type": "reduce",
+          "expression": "A",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "days_in_month(vector(time())) * 86400 / clamp_min(vector($__range_s), 86400)",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RB",
+          "type": "reduce",
+          "expression": "B",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(fixed_cost_month_usd{item=\"Claude subscription\"})",
+          "refId": "P",
+          "instant": true,
+          "range": false,
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RP",
+          "type": "reduce",
+          "expression": "P",
+          "reducer": "last",
+          "settings": {
+            "mode": "replaceNN",
+            "replaceWithValue": 0
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "SUM",
+          "type": "math",
+          "expression": "$RA * $RB / $RP"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:x",
+          "decimals": 1,
+          "noValue": "Not priced"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 19,
+        "y": 7,
+        "w": 5,
+        "h": 5
+      },
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "List price through the month against the plan",
+      "description": "The Claude Code API calls at list price, added up hour by hour from the first of the month (the browser's timezone), against the plan price as a flat line. The day the list price crosses the line is the day the plan has paid for itself. List price is what Claude Code reports per call, from its api_request events in Loki. The plan line is the price as of now, and is absent until the plan has a price.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cost_usd | unwrap cost_usd [$__interval]))",
+          "refId": "A",
+          "legendFormat": "List price"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(max_over_time(fixed_cost_month_usd{item=\"Claude subscription\"}[1d]))",
+          "refId": "B",
+          "legendFormat": "Plan price"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never",
+            "axisSoftMin": 0,
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Plan price"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "timeFrom": "now/M",
+      "interval": "1h",
+      "maxDataPoints": 800,
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "filter": {
+            "id": "byRefId",
+            "options": "A"
+          },
+          "options": {
+            "type": "include",
+            "match": "all",
+            "filters": [
+              {
+                "fieldName": "Time",
+                "config": {
+                  "id": "greater",
+                  "options": {
+                    "value": "${__from}"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "calculateField",
+          "filter": {
+            "id": "byRefId",
+            "options": "A"
+          },
+          "options": {
+            "mode": "cumulativeFunctions",
+            "cumulative": {
+              "reducer": "sum"
+            },
+            "alias": "List price",
+            "replaceFields": true
+          }
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 9
+      },
+      "id": 13
+    },
+    {
+      "type": "row",
+      "title": "Cache efficiency",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "id": 14
+    },
+    {
+      "type": "stat",
+      "title": "Cache hit ratio, month to date",
+      "description": "Input tokens served from the prompt cache, over all input tokens (fresh input, cache reads and cache writes) of the Claude Code API calls since the first of the month. Long sessions re-read their context cheaply, which is what keeps the list price of a call low. Pinned to the calendar month in the browser's timezone.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) / (sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__range])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__range])))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "timeFrom": "now/M",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 8,
+        "h": 8
+      },
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache hit ratio per day",
+      "description": "The same ratio per day. A drop follows a compaction, a new system prompt or a burst of fresh context; a high, steady value means the sessions reuse what they have already read.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__interval])) / (sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep input_tokens | unwrap input_tokens [$__interval])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_read_tokens | unwrap cache_read_tokens [$__interval])) + sum(sum_over_time({service_name=~\"claude-code.*\"} | event_name=\"api_request\" | keep cache_creation_tokens | unwrap cache_creation_tokens [$__interval])))",
+          "refId": "A",
+          "legendFormat": "Cache hit ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1d",
+      "gridPos": {
+        "x": 8,
+        "y": 22,
+        "w": 16,
+        "h": 8
+      },
+      "id": 16
+    },
+    {
+      "type": "row",
+      "title": "Cost centers (virtual tags)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "id": 17
     },
     {
       "type": "barchart",
@@ -398,11 +1141,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 31,
         "w": 24,
         "h": 10
       },
-      "id": 8
+      "id": 18
     },
     {
       "type": "table",
@@ -529,11 +1272,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 41,
         "w": 12,
         "h": 9
       },
-      "id": 9
+      "id": 19
     },
     {
       "type": "bargauge",
@@ -575,11 +1318,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 17,
+        "y": 41,
         "w": 6,
         "h": 9
       },
-      "id": 10
+      "id": 20
     },
     {
       "type": "bargauge",
@@ -621,11 +1364,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 17,
+        "y": 41,
         "w": 6,
         "h": 9
       },
-      "id": 11
+      "id": 21
     },
     {
       "type": "row",
@@ -634,11 +1377,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 50,
         "w": 24,
         "h": 1
       },
-      "id": 12
+      "id": 22
     },
     {
       "type": "bargauge",
@@ -680,11 +1423,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 13
+      "id": 23
     },
     {
       "type": "barchart",
@@ -755,11 +1498,11 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 27,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 14
+      "id": 24
     },
     {
       "type": "barchart",
@@ -830,11 +1573,11 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 27,
+        "y": 51,
         "w": 8,
         "h": 10
       },
-      "id": 15
+      "id": 25
     },
     {
       "type": "row",
@@ -843,11 +1586,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 61,
         "w": 24,
         "h": 1
       },
-      "id": 16
+      "id": 26
     },
     {
       "type": "table",
@@ -974,11 +1717,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 62,
         "w": 12,
         "h": 9
       },
-      "id": 17
+      "id": 27
     },
     {
       "type": "table",
@@ -1105,11 +1848,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 62,
         "w": 12,
         "h": 9
       },
-      "id": 18
+      "id": 28
     },
     {
       "type": "barchart",
@@ -1180,11 +1923,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 71,
         "w": 24,
         "h": 8
       },
-      "id": 19
+      "id": 29
     },
     {
       "type": "row",
@@ -1193,11 +1936,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 79,
         "w": 24,
         "h": 1
       },
-      "id": 20
+      "id": 30
     },
     {
       "type": "stat",
@@ -1237,11 +1980,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 80,
         "w": 6,
         "h": 5
       },
-      "id": 21
+      "id": 31
     },
     {
       "type": "stat",
@@ -1280,11 +2023,11 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 56,
+        "y": 80,
         "w": 6,
         "h": 5
       },
-      "id": 22
+      "id": 32
     },
     {
       "type": "stat",
@@ -1323,11 +2066,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 80,
         "w": 6,
         "h": 5
       },
-      "id": 23
+      "id": 33
     },
     {
       "type": "stat",
@@ -1367,11 +2110,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 56,
+        "y": 80,
         "w": 6,
         "h": 5
       },
-      "id": 24
+      "id": 34
     },
     {
       "type": "row",
@@ -1380,11 +2123,11 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 61,
+        "y": 85,
         "w": 24,
         "h": 1
       },
-      "id": 25
+      "id": 35
     },
     {
       "type": "gauge",
@@ -1440,11 +2183,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 86,
         "w": 4,
         "h": 5
       },
-      "id": 26
+      "id": 36
     },
     {
       "type": "stat",
@@ -1484,11 +2227,11 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 62,
+        "y": 86,
         "w": 3,
         "h": 5
       },
-      "id": 27
+      "id": 37
     },
     {
       "type": "stat",
@@ -1527,11 +2270,11 @@
       },
       "gridPos": {
         "x": 7,
-        "y": 62,
+        "y": 86,
         "w": 4,
         "h": 5
       },
-      "id": 28
+      "id": 38
     },
     {
       "type": "stat",
@@ -1584,11 +2327,11 @@
       },
       "gridPos": {
         "x": 11,
-        "y": 62,
+        "y": 86,
         "w": 3,
         "h": 5
       },
-      "id": 29
+      "id": 39
     },
     {
       "type": "stat",
@@ -1627,11 +2370,11 @@
       },
       "gridPos": {
         "x": 14,
-        "y": 62,
+        "y": 86,
         "w": 3,
         "h": 5
       },
-      "id": 30
+      "id": 40
     },
     {
       "type": "stat",
@@ -1671,11 +2414,11 @@
       },
       "gridPos": {
         "x": 17,
-        "y": 62,
+        "y": 86,
         "w": 3,
         "h": 5
       },
-      "id": 31
+      "id": 41
     },
     {
       "type": "stat",
@@ -1716,11 +2459,11 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 62,
+        "y": 86,
         "w": 3,
         "h": 4
       },
-      "id": 32
+      "id": 42
     },
     {
       "type": "stat",
@@ -1761,11 +2504,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 91,
         "w": 3,
         "h": 4
       },
-      "id": 33
+      "id": 43
     },
     {
       "type": "stat",
@@ -1805,11 +2548,11 @@
       },
       "gridPos": {
         "x": 3,
-        "y": 67,
+        "y": 91,
         "w": 3,
         "h": 4
       },
-      "id": 34
+      "id": 44
     }
   ],
   "links": [
