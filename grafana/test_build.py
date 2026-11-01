@@ -67,3 +67,41 @@ chart = panel(cut, "List price through the month against the plan")
 assert not any("__to" in t.get("expr", "") or "__from" in t.get("expr", "") for t in chart["targets"]), "FAIL: time variable in a public query"
 
 print("ok: the public FinOps cut passes and refuses 6 planted faults")
+
+
+# ---- Chain Traveler traffic (public): one site, counts only
+import copy
+
+ct = build.chaintraveler_traffic_public()
+assert ct["uid"] == "chaintraveler-traffic-public" and ct["templating"]["list"] == []
+ct_titles = {p["title"] for p in ct["panels"]}
+for kept in ("App opens", "Timetable checks", "Timetable downloads", "Countries", "Crawlers and scripts", "Read this first"):
+    assert kept in ct_titles, f"FAIL: {kept} is not in the Chain Traveler cut"
+for dropped in ("Referrers", "Top pages"):
+    assert dropped not in ct_titles, f"FAIL: {dropped} is in the Chain Traveler cut"
+
+
+def ct_refuses(edit, needle):
+    d = copy.deepcopy(ct)
+    edit(d)
+    try:
+        build.check_site_public(d, build.CT_SITE)
+    except AssertionError as e:
+        assert needle in str(e), f"stopped for another reason: {e}"
+        return
+    raise SystemExit(f"FAIL: the Chain Traveler cut passed with a planted fault ({needle})")
+
+
+ct_refuses(lambda d: panel(d, "App opens")["targets"][0].update(expr='sum(count_over_time({job="site-traffic"} [$__range]))'), "not fixed to chaintraveler.app")
+ct_refuses(lambda d: panel(d, "App opens")["targets"][0].update(expr='sum(count_over_time({job="site-traffic", site=~"$site"} [$__range]))'), "not fixed to chaintraveler.app")
+ct_refuses(lambda d: panel(d, "App opens")["targets"][0].update(expr='sum(count_over_time({job="site-traffic", site="chaintraveler.app", site=~".*"} [$__range]))'), "a site variable or a pattern")
+ct_refuses(lambda d: panel(d, "Countries")["targets"][0].update(expr='sum by (referrer) (count_over_time({job="site-traffic", site="chaintraveler.app"} | json [$__range]))'), "reads referrer or User-Agent")
+ct_refuses(lambda d: d["templating"]["list"].append({"name": "site"}), "template variables")
+ct_refuses(lambda d: panel(d, "Read this first")["options"].update(content="Traffic of machinebehavior.io too."), "in the JSON")
+ct_refuses(lambda d: panel(d, "Read this first")["options"].update(content="Top referrer hosts."), "in the JSON")
+# Every query of the cut is the Chain Traveler stream, and none uses a Grafana time variable that a public dashboard does not fill.
+for p in ct["panels"]:
+    for t in p.get("targets", []):
+        assert "__from" not in t["expr"] and "__to" not in t["expr"], f"FAIL: {p['title']} uses a time variable a public dashboard does not interpolate"
+
+print("ok: the Chain Traveler public cut passes and refuses 7 planted faults")

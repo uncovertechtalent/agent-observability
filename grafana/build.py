@@ -1530,6 +1530,28 @@ def finops_public():
 
 # ---------------------------------------------------------------- site traffic
 
+def traffic_ranked(title, expr, columns, value, description=""):
+    """Counts as a table, largest first (a Loki instant query: Time, one column per label, Value #A)."""
+    return {
+        "type": "table", "title": title, "description": description, "datasource": LOKI,
+        "targets": [target(expr, ds=LOKI, queryType="instant")],
+        "transformations": [
+            {"id": "organize", "options": {"excludeByName": {"Time": True},
+                                           "indexByName": {c: i for i, c in enumerate((*columns, "Value #A"))},
+                                           "renameByName": {**columns, "Value #A": value}}},
+            {"id": "sortBy", "options": {"sort": [{"field": value, "desc": True}]}},
+        ],
+        "fieldConfig": {"defaults": {"unit": "none", "decimals": 0}, "overrides": []},
+        "options": {"showHeader": True, "cellHeight": "sm"},
+    }
+
+
+def traffic_total(title, expr, description):
+    p = stat(title, expr, unit="none", decimals=0, description=description, ds=LOKI)
+    p["options"].update(colorMode="none", graphMode="none")
+    return p
+
+
 def site_traffic(public=False):
     """Site traffic from the CloudFront access logs of the static sites (repo site-infra).
 
@@ -1549,26 +1571,7 @@ def site_traffic(public=False):
     every_raw = f'{{job="site-traffic"{site}}}'
     bots_raw = f'{{job="site-traffic", agent="bot"{site}}}'
 
-    def ranked(title, expr, columns, value, description=""):
-        """Counts as a table, largest first (a Loki instant query: Time, one column per label, Value #A)."""
-        return {
-            "type": "table", "title": title, "description": description, "datasource": LOKI,
-            "targets": [target(expr, ds=LOKI, queryType="instant")],
-            "transformations": [
-                {"id": "organize", "options": {"excludeByName": {"Time": True},
-                                               "indexByName": {c: i for i, c in enumerate((*columns, "Value #A"))},
-                                               "renameByName": {**columns, "Value #A": value}}},
-                {"id": "sortBy", "options": {"sort": [{"field": value, "desc": True}]}},
-            ],
-            "fieldConfig": {"defaults": {"unit": "none", "decimals": 0}, "overrides": []},
-            "options": {"showHeader": True, "cellHeight": "sm"},
-        }
-
-    def total(title, expr, description):
-        p = stat(title, expr, unit="none", decimals=0, description=description, ds=LOKI)
-        p["options"].update(colorMode="none", graphMode="none")
-        return p
-
+    ranked, total = traffic_ranked, traffic_total
     pages = f'{human} | kind="page"'
     p = [L.row("Totals over the selected range")]
     p.append(L.place(total("Page views", f'sum(count_over_time({pages} [$__range]))',
@@ -1616,6 +1619,100 @@ def site_traffic(public=False):
                   p, variables, refresh="5m", time_from="now-7d")
     d["tags"] += ["sites"]
     return d
+
+
+# ---------------------------------------------------------------- Chain Traveler traffic (public)
+
+CT_SITE = "chaintraveler.app"
+
+
+def check_site_public(d, site):
+    """What a public cut of one site's traffic must never contain: another site, a variable, a referrer, an id."""
+    assert not d["templating"]["list"], "public dashboards ignore template variables; none allowed"
+    for p in d["panels"]:
+        for t in p.get("targets", []):
+            expr = t["expr"]
+            assert f'site="{site}"' in expr and 'job="site-traffic"' in expr, f"{p['title']}: query not fixed to {site}"
+            assert "$site" not in expr and "site=~" not in expr, f"{p['title']}: a site variable or a pattern"
+            assert "referrer" not in expr and "user_agent" not in expr, f"{p['title']}: reads referrer or User-Agent"
+    leak = re.search(r"referrer|arn:|bucket|account[ _]?id|\$site|machinebehavior|tychat", json.dumps(d), re.I)
+    assert not leak, f"public traffic cut: '{leak.group(0)}' in the JSON"
+    return d
+
+
+def chaintraveler_traffic_public():
+    """Traffic to chaintraveler.app, from the same CloudFront logs as the site traffic dashboards, for sharing.
+
+    The site is fixed in every query (public dashboards ignore template variables, and a shared link must not
+    show the other sites). Counts only: no IP address is in the logs, and no referrer host, 404 path or
+    User-Agent string is shown. The app works offline, so these are online launches: a floor, said on the page.
+    """
+    L = Layout()
+    base = f'{{job="site-traffic", site="{CT_SITE}"'
+    human = f'{base}, agent="human"}} | json'
+    every = f'{base}}} | json'
+    bots = f'{base}, agent="bot"}} | json'
+    opens = f'{human} | kind="page"'
+    checks = f'{human} | path="/data/latest.json"'
+    downloads = f'{human} | path=~"/data/[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}/timetable[.]bin[.]gz"'
+
+    def text(title, md):
+        return {"type": "text", "title": title, "options": {"mode": "markdown", "content": md}}
+
+    def bars(title, expr, description, interval):
+        p = loki_series(title, [(expr, title)], draw="bars", description=description)
+        p["interval"] = interval
+        return p
+
+    p = [L.row("Totals over the selected range")]
+    p.append(L.place(traffic_total("App opens", f'sum(count_over_time({opens} [$__range]))',
+                                   "Times a browser loaded the app's page while online. Offline launches never reach the server and are not counted."), 6, 4))
+    p.append(L.place(traffic_total("Timetable checks", f'sum(count_over_time({checks} [$__range]))',
+                                   "Times an online app asked whether a newer timetable exists: one per online launch, and again when the device comes back online."), 6, 4))
+    p.append(L.place(traffic_total("Timetable downloads", f'sum(count_over_time({downloads} [$__range]))',
+                                   "Downloads of the timetable file (about 5 MB): first installs and timetable updates."), 6, 4))
+    p.append(L.place(traffic_total("Countries", f'count(sum by (country) (count_over_time({opens} [$__range])))',
+                                   "Countries with at least one app open. CloudFront derives the country; no IP address is stored."), 6, 4))
+
+    p.append(L.row("Over time"))
+    p.append(L.place(bars("App opens per hour", f'sum(count_over_time({opens} [$__interval]))',
+                          "Online app opens by browsers, per hour.", "1h"), 12, 8))
+    p.append(L.place(bars("Timetable downloads per day", f'sum(count_over_time({downloads} [$__interval]))',
+                          "First installs and timetable updates, per day.", "1d"), 12, 8))
+    status = loki_series("Responses by status code", [(f'sum by (status) (count_over_time({every} [$__interval]))', "{{status}}")],
+                         draw="bars", stack=True, description="All requests to the site, bots included, per hour and status code.")
+    status["interval"] = "1h"
+    p.append(L.place(status, 24, 8))
+
+    p.append(L.row("From where, and who else reads it"))
+    p.append(L.place(traffic_ranked("Countries", f'sum by (country) (count_over_time({opens} [$__range]))',
+                                    {"country": "Country"}, "Opens", "ISO 3166 country code CloudFront derives from the viewer address."), 12, 10))
+    p.append(L.place(traffic_ranked("Crawlers and scripts", f'sum by (bot) (count_over_time({bots} [$__range]))',
+                                    {"bot": "Agent"}, "Requests", "Bot requests by the agent the User-Agent names. other = a generic bot pattern."), 12, 10))
+    p.append(L.place(traffic_total("Not found", f'sum(count_over_time({every} | status="404" [$__range]))',
+                                   "Requests that answered 404, bots included. The paths are not shown: any request picks them."), 6, 4))
+    p.append(L.place(traffic_total("Bot requests", f'sum(count_over_time({base}, agent="bot"}} [$__range]))',
+                                   "Requests whose User-Agent names a crawler, a script or nothing at all."), 6, 4))
+
+    p.append(L.row("What these numbers are"))
+    p.append(L.place(text("Read this first", "\n".join([
+        "**Requests, not people.** The logs hold no IP address, cookie, query string or full User-Agent, so a visitor cannot be counted, only what the server was asked for.",
+        "",
+        "**A floor.** Chain Traveler works offline: once it is installed on a device it opens without the network, and an offline launch never reaches the server. Opens here are online launches only.",
+        "",
+        "**Opens, checks, downloads.** Each online launch is an open and a timetable check. A download is the timetable file itself (about 5 MB): a first install, or an update after the daily build.",
+        "",
+        "**Early numbers are noisy.** The site went live on 2026-11-01. They include the owner's own testing and scanners that send a browser User-Agent and so count as browsers.",
+        "",
+        "Where visitors came from is not shown. Setup and privacy: github.com/uncovertechtalent-git/site-infra and the Privacy section of github.com/uncovertechtalent-git/chain-traveler.",
+    ])), 24, 9))
+
+    d = dashboard("chaintraveler-traffic-public", "Chain Traveler traffic (public)",
+                  "Visits to chaintraveler.app, from the CloudFront access logs. Counts only: the logs hold no IP address, "
+                  "and nothing that names a visitor reaches Loki. Online launches only: the app also works offline.",
+                  p, refresh="5m", time_from="now-7d")
+    d["tags"] += ["sites", "public"]
+    return check_site_public(d, CT_SITE)
 
 
 # ---------------------------------------------------------------- agent tool calls
@@ -1726,7 +1823,7 @@ def agent_tool_calls():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), agent_tool_calls()):
+    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
