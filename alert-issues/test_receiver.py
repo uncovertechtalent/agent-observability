@@ -23,9 +23,10 @@ class FakeGitHub:
     def __init__(self):
         self.issues, self.comments, self.calls = {}, [], []
         self.fail = False
+        self.fail_on = None  # one call name ("update", "comment", ...) that fails while every other call works
 
     def _log(self, *call):
-        if self.fail:
+        if self.fail or call[0] == self.fail_on:
             raise urllib.error.URLError("github down")
         self.calls.append(call)
 
@@ -275,6 +276,22 @@ class PagerEventTest(unittest.TestCase):
                                  "The responder agent posted its runbook link and read-only diagnosis in the pager.",
                                  "Resolved in the pager by Stefan Coetzee."])
         self.assertIn("acknowledged by Stefan Coetzee after 3 min", self.gh.issues[1]["body"])
+
+    def test_a_failed_github_update_leaves_no_state_so_the_retry_lands(self):
+        # Issue 19: the state was written before the GitHub call, so the pager's retry after a 500
+        # found the record stored, got "unchanged", and the board never showed the page.
+        self.gh.fail_on = "update"
+        with self.assertRaises(urllib.error.URLError):
+            self.event()
+        self.assertNotIn(self.ep, self.rx.state.get(FP).get("pages") or {})
+        self.assertNotIn("<!-- pager:start -->", self.gh.issues[1]["body"])
+        self.gh.fail_on = None
+        self.assertEqual(self.event(), "#1 pager record updated")  # the same record, sent again by the pager
+        self.assertEqual(self.record()[0]["alert"], "OllamaDown")
+        self.assertIn(self.ep, self.rx.state.get(FP)["pages"])
+        self.event(acknowledged="2026-10-17T13:43:30Z", acknowledged_by="Stefan Coetzee", time_to_acknowledge_s=180)
+        self.assertEqual([c for _, c in self.gh.comments],
+                         ["Acknowledged in the pager by Stefan Coetzee, 3 min after it fired."])
 
     def test_a_resolve_by_alertmanager_needs_no_comment_and_episodes_add_up(self):
         self.event(resolved="2026-10-17T14:00:30Z", resolved_by="Alertmanager", time_to_resolve_s=1200)
