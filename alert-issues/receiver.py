@@ -368,8 +368,12 @@ class Receiver:
             raise LookupError(f"issue #{number} is gone")
         pages[episode] = view
         pages = dict(sorted(pages.items(), key=lambda kv: kv[1]["fired"])[-PAGER_EPISODES:])
-        self.state.put(fp, {**record, "pages": pages})
+        # GitHub first, the state after: a failed update answers 500 and the pager sends the same record
+        # again, and that retry must not find the record already stored and answer "unchanged" (issue 19).
+        # The comments come after the state, so a retry after a failed comment does not post the
+        # earlier ones twice; the record in the body is right either way.
         self.gh.update_issue(number, body=with_pager_block(issue.get("body") or "", pages))
+        self.state.put(fp, {**record, "pages": pages})
         if view["acknowledged"] and not old.get("acknowledged"):
             self.gh.comment(number, f"Acknowledged in the pager by {view['acknowledged_by']}, "
                                     f"{span(view['time_to_acknowledge_s'])} after it fired.")
