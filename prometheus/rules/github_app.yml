@@ -18,18 +18,20 @@ groups:
         annotations:
           summary: The GitHub App token minter's timer is not active; no token will be renewed.
 
-      # A token lives 60 minutes and is renewed every 30, so a file older than 70 minutes holds an expired token.
+      # A token lives 60 minutes and is renewed every 30, so a file older than 60 minutes holds an expired token.
+      # One missed run leaves a file 30 to 60 minutes old that still works; GitHubAppMintFailed tickets that run.
       - alert: GitHubAppTokenStale
-        expr: time() - github_app_token_file_mtime_seconds{service!="alert-issues"} > 70 * 60
+        expr: time() - github_app_token_file_mtime_seconds{service!="alert-issues"} > 60 * 60
         labels: {severity: ticket}
         annotations:
-          summary: "The {{ $labels.service }} token ({{ $labels.app }}, {{ $labels.owner }}) is older than 70 minutes and has expired."
-      # The alert-issues token turns tickets into board issues; with it expired, tickets go nowhere, so this one pages.
+          summary: "The {{ $labels.service }} token ({{ $labels.app }}, {{ $labels.owner }}) is older than 60 minutes and has expired."
+      # The alert-issues token turns tickets into board issues; with it expired, tickets go nowhere, so this one
+      # pages, at 50 minutes: before the token expires, so the page itself does not depend on it.
       - alert: GitHubAppAlertIssuesTokenStale
-        expr: time() - github_app_token_file_mtime_seconds{service="alert-issues"} > 70 * 60
+        expr: time() - github_app_token_file_mtime_seconds{service="alert-issues"} > 50 * 60
         labels: {severity: page}
         annotations:
-          summary: "The alert-issues token ({{ $labels.app }}, {{ $labels.owner }}) is older than 70 minutes: tickets no longer become issues."
+          summary: "The alert-issues token ({{ $labels.app }}, {{ $labels.owner }}) is 50 minutes old and expires within 10: tickets will stop becoming issues."
 
       - alert: GitHubAppMintMetricsMissing
         expr: absent(github_app_mint_last_run_timestamp_seconds) and on() max(up{job="node"}) == 1

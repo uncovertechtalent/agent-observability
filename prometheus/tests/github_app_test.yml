@@ -5,8 +5,8 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # Files written at t=0 and never again: at 69 minutes quiet, at 71 minutes the deploy-exporter token tickets
-  # and the alert-issues token pages. The unit failed at 40 minutes: ticket at once.
+  # Files written at t=0 and never again: the alert-issues token pages from 51 minutes, the deploy-exporter
+  # token tickets from 61 minutes. The unit failed at 40 minutes: ticket at once.
   - interval: 1m
     input_series:
       - series: 'github_app_token_file_mtime_seconds{app="reader",owner="o",service="deploy-exporter"}'
@@ -22,21 +22,24 @@ tests:
       - series: 'up{job="node"}'
         values: '1x80'
     alert_rule_test:
-      - eval_time: 69m
+      - eval_time: 59m
         alertname: GitHubAppTokenStale
         exp_alerts: []
-      - eval_time: 71m
+      - eval_time: 49m
+        alertname: GitHubAppAlertIssuesTokenStale
+        exp_alerts: []
+      - eval_time: 61m
         alertname: GitHubAppTokenStale
         exp_alerts:
           - exp_labels: {severity: ticket, app: reader, owner: o, service: deploy-exporter}
             exp_annotations:
-              summary: "The deploy-exporter token (reader, o) is older than 70 minutes and has expired."
-      - eval_time: 71m
+              summary: "The deploy-exporter token (reader, o) is older than 60 minutes and has expired."
+      - eval_time: 51m
         alertname: GitHubAppAlertIssuesTokenStale
         exp_alerts:
           - exp_labels: {severity: page, app: issues, owner: o, service: alert-issues}
             exp_annotations:
-              summary: "The alert-issues token (issues, o) is older than 70 minutes: tickets no longer become issues."
+              summary: "The alert-issues token (issues, o) is 50 minutes old and expires within 10: tickets will stop becoming issues."
       - eval_time: 41m
         alertname: GitHubAppMintFailed
         exp_alerts:

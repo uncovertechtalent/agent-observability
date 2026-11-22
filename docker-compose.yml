@@ -118,7 +118,9 @@ services:
   # A second instance of the same exporter, pointed at the Ollama of the Mac mini LLM box (README,
   # "The Mac mini LLM box"). Only its /api/ps poller is used: which models are loaded and whether the
   # resident (MACMINI_OLLAMA_RESIDENT) is one of them. Compose network only; no client is proxied.
+  # Starts only with the "macmini" profile (COMPOSE_PROFILES=macmini in .env).
   ollama-exporter-macmini:
+    profiles: [macmini]
     build: ./ollama-exporter
     environment:
       - OLLAMA_UPSTREAM=${MACMINI_OLLAMA_URL:-http://localhost:11434}

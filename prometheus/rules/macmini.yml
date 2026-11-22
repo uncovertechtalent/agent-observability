@@ -1,14 +1,14 @@
 # The Mac mini LLM box (README, "The Mac mini LLM box"): node_exporter and macmon on the box, and its Ollama
 # through ollama-exporter-macmini. Scrape failures of these jobs are ScrapeTargetDown (lan.yml); ping, LM Studio
 # and the OpenCode web UI are probes in the lan-icmp and lan-services target files (LANHostDown, LANServiceDown).
-# The box is a sandbox, so everything here is a ticket.
+# The box is a sandbox, so everything here is a ticket, filed under area:ai.
 groups:
   - name: macmini
     rules:
       - alert: MacMiniOllamaDown
         expr: ollama_up{job="macmini-ollama"} == 0
         for: 3m
-        labels: {severity: ticket}
+        labels: {severity: ticket, area: ai}
         annotations:
           summary: Ollama on the Mac mini does not answer /api/ps.
 
@@ -20,7 +20,7 @@ groups:
           and on() ollama_up{job="macmini-ollama"} == 1
           unless on() max(battery_run_active{host="macmini"}) == 1
         for: 15m
-        labels: {severity: ticket}
+        labels: {severity: ticket, area: ai}
         annotations:
           summary: "The resident model {{ $labels.model }} has not been loaded on the Mac mini for 15 minutes."
 
@@ -29,7 +29,7 @@ groups:
       - alert: MacMiniMemoryPressure
         expr: max(macmon_memory_pressure_level{job="macmini-macmon"}) >= 2
         for: 10m
-        labels: {severity: ticket}
+        labels: {severity: ticket, area: ai}
         annotations:
           summary: The Mac mini has been under memory pressure (warning or critical) for 10 minutes; models are swapping.
 
@@ -38,6 +38,6 @@ groups:
           node_filesystem_avail_bytes{job="macmini-node", mountpoint=~"/System/Volumes/Data|/Volumes/.+"}
           / node_filesystem_size_bytes{job="macmini-node", mountpoint=~"/System/Volumes/Data|/Volumes/.+"} < 0.10
         for: 30m
-        labels: {severity: ticket}
+        labels: {severity: ticket, area: ai}
         annotations:
           summary: "{{ $labels.mountpoint }} on the Mac mini has less than 10% free."

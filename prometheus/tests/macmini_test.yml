@@ -16,7 +16,7 @@ tests:
       - eval_time: 18m
         alertname: MacMiniResidentNotLoaded
         exp_alerts:
-          - exp_labels: {severity: ticket, job: macmini-ollama, model: "m:latest"}
+          - exp_labels: {severity: ticket, area: ai, job: macmini-ollama, model: "m:latest"}
             exp_annotations:
               summary: "The resident model m:latest has not been loaded on the Mac mini for 15 minutes."
       - eval_time: 30m
@@ -25,7 +25,7 @@ tests:
       - eval_time: 30m
         alertname: MacMiniOllamaDown
         exp_alerts:
-          - exp_labels: {severity: ticket, job: macmini-ollama}
+          - exp_labels: {severity: ticket, area: ai, job: macmini-ollama}
             exp_annotations:
               summary: Ollama on the Mac mini does not answer /api/ps.
 
@@ -63,12 +63,12 @@ tests:
       - eval_time: 22m
         alertname: MacMiniMemoryPressure
         exp_alerts:
-          - exp_labels: {severity: ticket}
+          - exp_labels: {severity: ticket, area: ai}
             exp_annotations:
               summary: The Mac mini has been under memory pressure (warning or critical) for 10 minutes; models are swapping.
       - eval_time: 35m
         alertname: MacMiniDiskLow
         exp_alerts:
-          - exp_labels: {severity: ticket, job: macmini-node, mountpoint: /System/Volumes/Data}
+          - exp_labels: {severity: ticket, area: ai, job: macmini-node, mountpoint: /System/Volumes/Data}
             exp_annotations:
               summary: "/System/Volumes/Data on the Mac mini has less than 10% free."

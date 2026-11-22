@@ -241,6 +241,14 @@ async def proxy(request: web.Request) -> web.StreamResponse:
             TIME_TO_FIRST_TOKEN.labels(**labels).observe(first_chunk_at - start)
 
 
+def resident_loaded(models: list, resident: str) -> int:
+    """1 if `resident` is among the /api/ps models, by name or model field, with or without ":latest"."""
+    def norm(n: str) -> str:
+        return n if ":" in n else n + ":latest"
+    names = {norm(m.get(k, "")) for m in models for k in ("name", "model") if m.get(k)}
+    return 1 if norm(resident) in names else 0
+
+
 async def metrics(_: web.Request) -> web.Response:
     return web.Response(body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST})
 
@@ -270,8 +278,7 @@ async def poll_ps(app: web.Application) -> None:
                     except ValueError:
                         pass
             if RESIDENT:
-                names = {m.get("name", "") for m in models} | {m.get("model", "") for m in models}
-                RESIDENT_LOADED.labels(model=RESIDENT).set(1 if RESIDENT in names else 0)
+                RESIDENT_LOADED.labels(model=RESIDENT).set(resident_loaded(models, RESIDENT))
             UPSTREAM_UP.set(1)
         except Exception as exc:  # the poller must never die
             log.warning("ps poll failed: %s", exc)

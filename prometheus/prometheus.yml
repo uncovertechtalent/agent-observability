@@ -81,7 +81,8 @@ scrape_configs:
       - targets: ["host.docker.internal:9835"]
 
   # The Mac mini LLM box: node_exporter, macmon (Apple Silicon: memory pressure, temperatures, power) and
-  # its Ollama through ollama-exporter-macmini. Addresses in the git-ignored targets/macmini-*.local.yml.
+  # its Ollama through ollama-exporter-macmini (compose profile "macmini"). All three read git-ignored target
+  # files (targets/macmini-*.local.yml), so a stack without the box has no targets and no alerts.
   # Rules: rules/macmini.yml.
   - job_name: macmini-node
     file_sd_configs:
@@ -90,8 +91,8 @@ scrape_configs:
     file_sd_configs:
       - files: [/etc/prometheus/targets/macmini-macmon.local.yml]
   - job_name: macmini-ollama
-    static_configs:
-      - targets: ["ollama-exporter-macmini:11435"]
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/macmini-ollama.local.yml]
 
   # Per-container CPU, memory, network and disk from cAdvisor.
   - job_name: cadvisor
