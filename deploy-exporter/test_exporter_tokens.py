@@ -3,6 +3,7 @@
     cd deploy-exporter && python3 -m unittest test_exporter_tokens
 """
 import os
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -12,7 +13,13 @@ import exporter
 
 class TokenFor(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
+        self.root = tempfile.mkdtemp()
+        self.dir = os.path.join(self.root, "tokens")
+        os.mkdir(self.dir)
+        exporter._UNREADABLE_WARNED.clear()
+
+    def tearDown(self):
+        shutil.rmtree(self.root)
 
     def write(self, owner, value):
         with open(os.path.join(self.dir, owner), "w") as f:
@@ -55,10 +62,22 @@ class TokenFor(unittest.TestCase):
             self.assertEqual(exporter.token_for("rate_limit"), "default")
 
     def test_owner_cannot_escape_the_dir(self):
-        with open(os.path.join(os.path.dirname(self.dir), "outside"), "w") as f:
+        with open(os.path.join(self.root, "outside"), "w") as f:
             f.write("outside")
         with mock.patch.object(exporter, "TOKEN_DIR", self.dir), mock.patch.object(exporter, "TOKEN", "default"):
             self.assertEqual(exporter.token_for("repos/../outside/actions/runs"), "default")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_unreadable_file_falls_back_and_warns_once(self):
+        self.write("uncovertechtalent", "secret")
+        os.chmod(os.path.join(self.dir, "uncovertechtalent"), 0)
+        with mock.patch.object(exporter, "TOKEN_DIR", self.dir), mock.patch.object(exporter, "TOKEN", "default"), \
+                mock.patch.object(exporter, "log") as log:
+            self.assertEqual(exporter.token_for("repos/uncovertechtalent/x/actions/runs"), "default")
+            self.assertEqual(exporter.token_for("repos/uncovertechtalent/x/actions/runs"), "default")
+        self.assertEqual(log.call_count, 1)
+        self.assertIn("cannot be read", log.call_args[0][0])
+        self.assertNotIn("secret", log.call_args[0][0])
 
 
 if __name__ == "__main__":

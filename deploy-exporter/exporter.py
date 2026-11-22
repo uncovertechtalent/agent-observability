@@ -42,11 +42,20 @@ TOKEN_DIR = os.environ.get("GITHUB_TOKEN_DIR", "")
 def token_file(owner):
     if not TOKEN_DIR or not re.fullmatch(r"[A-Za-z0-9-]+", owner):  # GitHub owner names; no path tricks
         return ""
+    path = os.path.join(TOKEN_DIR, owner.lower())
     try:
-        with open(os.path.join(TOKEN_DIR, owner.lower())) as f:
+        with open(path) as f:
             return f.read().strip()
-    except OSError:
+    except FileNotFoundError:
         return ""
+    except OSError as e:  # there but unreadable: a mount or ownership mistake, not a token that is still to come
+        if path not in _UNREADABLE_WARNED:
+            _UNREADABLE_WARNED.add(path)
+            log(f"token file {path} exists but cannot be read ({type(e).__name__}); falling back to the variables")
+        return ""
+
+
+_UNREADABLE_WARNED = set()  # one line per file, not one per request
 
 
 def token_for(path):
