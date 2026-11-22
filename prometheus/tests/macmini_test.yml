@@ -72,3 +72,23 @@ tests:
           - exp_labels: {severity: ticket, area: ai, job: macmini-node, mountpoint: /System/Volumes/Data}
             exp_annotations:
               summary: "/System/Volumes/Data on the Mac mini has less than 10% free."
+
+  # The run's last push was 10 minutes ago (the pusher died without sending 0): stale, so the alert fires again.
+  - interval: 1m
+    input_series:
+      - series: 'ollama_up{job="macmini-ollama"}'
+        values: '1x40'
+      - series: 'ollama_resident_loaded{job="macmini-ollama",model="m:latest"}'
+        values: '0x40'
+      - series: 'battery_run_active{host="macmini",arm="a"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MacMiniResidentNotLoaded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: MacMiniResidentNotLoaded
+        exp_alerts:
+          - exp_labels: {severity: ticket, area: ai, job: macmini-ollama}
+            exp_annotations:
+              summary: The resident model has not been loaded on the Mac mini for 15 minutes.

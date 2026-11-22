@@ -14,6 +14,9 @@ groups:
 
       # The supervisor on the box reloads the resident within a minute of an eviction. A battery run may hold
       # another model for its whole run (battery_run_active, pushed by client/battery), so a run mutes this.
+      # Contract with the pusher (client/battery, PR 23): OTLP through Alloy, `host` as a data point attribute
+      # (not host.name, which becomes host_name), pushed at least every 5 minutes for the whole run (the driver
+      # sends every 30 s). A gauge older than 5 minutes is stale and no longer mutes.
       - alert: MacMiniResidentNotLoaded
         # The model label is dropped: board issues are public, and the resident's name stays on the dashboard.
         expr: |
