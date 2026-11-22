@@ -32,7 +32,7 @@ groups:
   - name: gen_ai_local_symptoms
     rules:
       - alert: OllamaDown
-        expr: ollama_up == 0
+        expr: ollama_up{job="ollama-exporter"} == 0
         for: 2m
         labels: {severity: page}
         annotations:
@@ -44,7 +44,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the Ollama metering proxy.
       - alert: ModelSpilledToCPU
-        expr: ollama_loaded_model_info{processor!="gpu"} == 1 and on() sum(ollama_requests_in_flight) > 0
+        expr: ollama_loaded_model_info{job="ollama-exporter", processor!="gpu"} == 1 and on() sum(ollama_requests_in_flight{job="ollama-exporter"}) > 0
         for: 5m
         labels: {severity: info}
         annotations:
