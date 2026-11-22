@@ -1,0 +1,50 @@
+# The GitHub App token minter on this host (uncovertechtalent-git/gitlab-home, github-app/): a oneshot unit
+# run by a timer every 30 minutes writes one-hour installation tokens into the files deploy-exporter and
+# alert-issues read. The unit state comes from node_exporter's systemd collector; the token file ages from
+# the textfile the minter writes after each run (github_app_mint.prom).
+groups:
+  - name: github_app_mint
+    rules:
+      - alert: GitHubAppMintFailed
+        expr: node_systemd_unit_state{name="github-app-mint.service", state="failed"} == 1
+        labels: {severity: ticket}
+        annotations:
+          summary: The GitHub App token minter failed its last run (journalctl -u github-app-mint).
+
+      - alert: GitHubAppMintTimerInactive
+        expr: node_systemd_unit_state{name="github-app-mint.timer", state="active"} == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: The GitHub App token minter's timer is not active; no token will be renewed.
+
+      # A token lives 60 minutes and is renewed every 30, so a file older than 60 minutes holds an expired token.
+      # One missed run leaves a file 30 to 60 minutes old that still works; GitHubAppMintFailed tickets that run.
+      - alert: GitHubAppTokenStale
+        expr: time() - github_app_token_file_mtime_seconds{service!="alert-issues"} > 60 * 60
+        labels: {severity: ticket}
+        annotations:
+          summary: "The {{ $labels.service }} token ({{ $labels.app }}, {{ $labels.owner }}) is older than 60 minutes and has expired."
+      # The alert-issues token turns tickets into board issues; with it expired, tickets go nowhere, so this one
+      # pages, at 50 minutes: before the token expires, so the page itself does not depend on it.
+      - alert: GitHubAppAlertIssuesTokenStale
+        expr: time() - github_app_token_file_mtime_seconds{service="alert-issues"} > 50 * 60
+        labels: {severity: page}
+        annotations:
+          summary: "The alert-issues token ({{ $labels.app }}, {{ $labels.owner }}) is 50 minutes old and expires within 10: tickets will stop becoming issues."
+
+      # The unit rules need node_exporter's systemd collector; without it (or with the timer removed) they have
+      # no series and stay quiet, so their absence is a ticket of its own.
+      - alert: GitHubAppMintUnitNotWatched
+        expr: absent(node_systemd_unit_state{name="github-app-mint.timer"}) and on() max(up{job="node"}) == 1
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: node_exporter reports no github-app-mint.timer state (systemd collector off, or the timer removed).
+
+      - alert: GitHubAppMintMetricsMissing
+        expr: absent(github_app_mint_last_run_timestamp_seconds) and on() max(up{job="node"}) == 1
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: The minter's textfile (github_app_mint.prom) is missing, so token ages are not watched.

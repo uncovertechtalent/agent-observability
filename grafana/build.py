@@ -135,7 +135,7 @@ def local_llm():
                      description="SLO: 95% of streamed chat requests see a first token within 4 s."), 4, 4),
         L.place(stat("TTFT p95", f"max(model:gen_ai_ttft_seconds:p95_5m{{{m}}})", "s", decimals=2), 4, 4),
         L.place(stat("Decode tok/s", f"avg(model:gen_ai_decode_tokens_per_second:mean5m{{{m}}})", decimals=1), 4, 4),
-        L.place(stat("Ollama up", "ollama_up", "bool_yes_no"), 4, 4),
+        L.place(stat("Ollama up", 'ollama_up{job="ollama-exporter"}', "bool_yes_no"), 4, 4),
 
         L.row("Latency"),
         L.place(heatmap("Time to first token",
@@ -165,7 +165,7 @@ def local_llm():
         ], "reqps"), 12, 8),
 
         L.row("Resources"),
-        L.place(table("Resident models", "ollama_loaded_model_bytes",
+        L.place(table("Resident models", 'ollama_loaded_model_bytes{job="ollama-exporter"}',
                       description="From /api/ps. processor=split or cpu means the model does not fit in VRAM."), 8, 8),
         L.place(timeseries("GPU utilisation and memory", [
             ("nvidia_smi_utilization_gpu_ratio", "GPU util"),
@@ -178,6 +178,90 @@ def local_llm():
     return dashboard("local-llm", "Local LLM (Ollama)",
                      "Latency, throughput and SLOs for a self-hosted Ollama server, metered by the proxy.",
                      p, [query_var("model", "Model", "label_values(gen_ai_client_operation_duration_seconds_count, gen_ai_request_model)")])
+
+
+MM_NODE = 'job="macmini-node"'
+MM_MON = 'job="macmini-macmon"'
+MM_OLLAMA = 'job="macmini-ollama"'
+
+
+def macmini():
+    """The Mac mini LLM box: is it up, is the resident model loaded, memory pressure, disk, heat, models.
+
+    Sources: node_exporter and macmon on the box (jobs macmini-node, macmini-macmon), its Ollama through
+    ollama-exporter-macmini (job macmini-ollama), and the LAN probes of its other services (lan-services
+    targets whose name starts with macmini). Decode speed per call comes from the stance battery's run
+    records (client/battery) and sits on the battery dashboard too. Internal: model names are shown.
+    """
+    L = Layout()
+    mm_probe = 'name=~"macmini.*"'
+    p = [
+        L.row("Box"),
+        L.place(stat("Exporter up", f"max(up{{{MM_NODE}}})", "bool_yes_no",
+                     description="node_exporter on the box answers the scrape."), 4, 4),
+        L.place(stat("Ollama up", f"max(ollama_up{{{MM_OLLAMA}}})", "bool_yes_no"), 4, 4),
+        L.place(stat("Resident loaded", f"max(ollama_resident_loaded{{{MM_OLLAMA}}})", "bool_yes_no",
+                     description="The model the box's supervisor keeps loaded (MACMINI_OLLAMA_RESIDENT) is in /api/ps. "
+                                 "A battery run may evict it on purpose."), 4, 4),
+        L.place(stat("Memory pressure", f"max(macmon_memory_pressure_level{{{MM_MON}}})",
+                     description="macOS pressure level: 1 normal, 2 warning, 4 critical."), 4, 4),
+        L.place(stat("RAM used", f"max(macmon_memory_ram_used_bytes{{{MM_MON}}}) / max(macmon_memory_ram_total_bytes{{{MM_MON}}})",
+                     "percentunit", decimals=0), 4, 4),
+        L.place(stat("Uptime", f"max(macmon_uptime_seconds{{{MM_MON}}})", "s", decimals=0), 4, 4),
+
+        L.row("Models"),
+        L.place(table("Loaded models", f"ollama_loaded_model_bytes{{{MM_OLLAMA}, kind=\"total\"}}",
+                      description="From the box's /api/ps, polled every 15 s."), 12, 8),
+        L.place(timeseries("Loaded models over time", [
+            (f"ollama_loaded_model_info{{{MM_OLLAMA}}}", "{{model}}"),
+        ], description="1 while a model is in memory. Gaps of the resident line are evictions."), 12, 8),
+        L.place(timeseries("Services on the box", [
+            (f"probe_success{{job=\"lan-services\", {mm_probe}}}", "{{name}}"),
+            (f"probe_success{{job=\"lan-icmp\", {mm_probe}}}", "ping"),
+        ], description="TCP connects to LM Studio and the OpenCode web UI, and a ping, from the lan-* probe jobs."), 24, 6),
+
+        L.row("Memory"),
+        L.place(timeseries("Memory", [
+            (f"max(macmon_memory_ram_used_bytes{{{MM_MON}}})", "used"),
+            (f"max(node_memory_wired_bytes{{{MM_NODE}}})", "wired (model weights on the GPU)"),
+            (f"max(node_memory_compressed_bytes{{{MM_NODE}}})", "compressed"),
+            (f"max(macmon_memory_swap_used_bytes{{{MM_MON}}})", "swap used"),
+            (f"max(macmon_memory_ram_total_bytes{{{MM_MON}}})", "total"),
+        ], "bytes"), 12, 8),
+        L.place(timeseries("Memory pressure", [
+            (f"max(macmon_memory_pressure_percent{{{MM_MON}}}) / 100", "pressure (macmon)"),
+            (f"max(macmon_memory_pressure_level{{{MM_MON}}}) / 4", "level / 4"),
+        ], "percentunit", description="The MacMiniMemoryPressure ticket fires at level 2 or more for 10 minutes."), 12, 8),
+
+        L.row("Compute and heat"),
+        L.place(timeseries("CPU and GPU busy", [
+            (f"max(macmon_cpu_usage_ratio{{{MM_MON}}})", "CPU"),
+            (f"max(macmon_gpu_usage_ratio{{{MM_MON}}})", "GPU"),
+        ], "percentunit"), 8, 8),
+        L.place(timeseries("Temperature", [
+            (f"max(macmon_cpu_temp_celsius{{{MM_MON}}})", "CPU"),
+            (f"max(macmon_gpu_temp_celsius{{{MM_MON}}})", "GPU"),
+        ], "celsius"), 8, 8),
+        L.place(timeseries("Power", [
+            (f"max(macmon_all_power_watts{{{MM_MON}}})", "all"),
+            (f"max(macmon_gpu_power_watts{{{MM_MON}}})", "GPU"),
+        ], "watt"), 8, 8),
+
+        L.row("Disk"),
+        L.place(timeseries("Free space", [
+            (f"node_filesystem_avail_bytes{{{MM_NODE}, mountpoint=~\"/System/Volumes/Data|/Volumes/.+\"}}"
+             f" / node_filesystem_size_bytes{{{MM_NODE}, mountpoint=~\"/System/Volumes/Data|/Volumes/.+\"}}", "{{mountpoint}}"),
+        ], "percentunit", description="The MacMiniDiskLow ticket fires below 10% for 30 minutes."), 12, 8),
+        L.place(timeseries("Disk throughput", [
+            (f"max(macmon_disk_read_bytes_per_second{{{MM_MON}}})", "read"),
+            (f"max(macmon_disk_write_bytes_per_second{{{MM_MON}}})", "write"),
+        ], "Bps"), 12, 8),
+    ]
+    d = dashboard("macmini", "Mac mini LLM box",
+                  "The local-model box: up, the resident model, memory pressure, disk, heat. Internal; never shared.",
+                  p, refresh="1m", time_from="now-24h")
+    d["tags"] += ["ai-ops"]
+    return d
 
 
 def local_llm_public():
@@ -1928,7 +2012,7 @@ def agent_tool_calls():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls(), battery()):
+    for d in (local_llm(), local_llm_public(), macmini(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls(), battery()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")
