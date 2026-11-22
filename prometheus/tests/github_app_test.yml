@@ -1,0 +1,72 @@
+# promtool test rules prometheus/tests/github_app_test.yml
+rule_files:
+  - ../rules/github_app.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Files written at t=0 and never again: at 69 minutes quiet, at 71 minutes the deploy-exporter token tickets
+  # and the alert-issues token pages. The unit failed at 40 minutes: ticket at once.
+  - interval: 1m
+    input_series:
+      - series: 'github_app_token_file_mtime_seconds{app="reader",owner="o",service="deploy-exporter"}'
+        values: '0x80'
+      - series: 'github_app_token_file_mtime_seconds{app="issues",owner="o",service="alert-issues"}'
+        values: '0x80'
+      - series: 'github_app_mint_last_run_timestamp_seconds'
+        values: '0x80'
+      - series: 'node_systemd_unit_state{name="github-app-mint.service",state="failed",type="oneshot"}'
+        values: '0x40 1x40'
+      - series: 'node_systemd_unit_state{name="github-app-mint.timer",state="active",type=""}'
+        values: '1x80'
+      - series: 'up{job="node"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 69m
+        alertname: GitHubAppTokenStale
+        exp_alerts: []
+      - eval_time: 71m
+        alertname: GitHubAppTokenStale
+        exp_alerts:
+          - exp_labels: {severity: ticket, app: reader, owner: o, service: deploy-exporter}
+            exp_annotations:
+              summary: "The deploy-exporter token (reader, o) is older than 70 minutes and has expired."
+      - eval_time: 71m
+        alertname: GitHubAppAlertIssuesTokenStale
+        exp_alerts:
+          - exp_labels: {severity: page, app: issues, owner: o, service: alert-issues}
+            exp_annotations:
+              summary: "The alert-issues token (issues, o) is older than 70 minutes: tickets no longer become issues."
+      - eval_time: 41m
+        alertname: GitHubAppMintFailed
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: github-app-mint.service, state: failed, type: oneshot}
+            exp_annotations:
+              summary: The GitHub App token minter failed its last run (journalctl -u github-app-mint).
+      - eval_time: 79m
+        alertname: GitHubAppMintTimerInactive
+        exp_alerts: []
+      - eval_time: 79m
+        alertname: GitHubAppMintMetricsMissing
+        exp_alerts: []
+
+  # Timer stopped; no textfile at all.
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{name="github-app-mint.timer",state="active",type=""}'
+        values: '1x5 0x70'
+      - series: 'up{job="node"}'
+        values: '1x75'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: GitHubAppMintTimerInactive
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: github-app-mint.timer, state: active}
+            exp_annotations:
+              summary: The GitHub App token minter's timer is not active; no token will be renewed.
+      - eval_time: 65m
+        alertname: GitHubAppMintMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: The minter's textfile (github_app_mint.prom) is missing, so token ages are not watched.

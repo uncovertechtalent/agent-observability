@@ -30,6 +30,9 @@ from prometheus_client import (
 UPSTREAM = os.environ.get("OLLAMA_UPSTREAM", "http://localhost:11434").rstrip("/")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "11435"))
 PS_POLL_SECONDS = float(os.environ.get("PS_POLL_SECONDS", "15"))
+# The model a supervisor keeps loaded on this Ollama (a name as /api/ps lists it, e.g. "m:latest").
+# Empty: no resident is expected and ollama_resident_loaded is not exported.
+RESIDENT = os.environ.get("OLLAMA_RESIDENT", "").strip()
 
 log = logging.getLogger("ollama-exporter")
 
@@ -102,6 +105,11 @@ LOADED_MODEL_EXPIRES = Gauge(
     ["model"],
 )
 UPSTREAM_UP = Gauge("ollama_up", "1 if the last /api/ps poll succeeded.")
+RESIDENT_LOADED = Gauge(
+    "ollama_resident_loaded",
+    "1 if the expected resident model (OLLAMA_RESIDENT) is in /api/ps, 0 if not.",
+    ["model"],
+)
 
 NS = 1e9
 
@@ -261,6 +269,9 @@ async def poll_ps(app: web.Application) -> None:
                         LOADED_MODEL_EXPIRES.labels(model=name).set(datetime.fromisoformat(expires).timestamp())
                     except ValueError:
                         pass
+            if RESIDENT:
+                names = {m.get("name", "") for m in models} | {m.get("model", "") for m in models}
+                RESIDENT_LOADED.labels(model=RESIDENT).set(1 if RESIDENT in names else 0)
             UPSTREAM_UP.set(1)
         except Exception as exc:  # the poller must never die
             log.warning("ps poll failed: %s", exc)
