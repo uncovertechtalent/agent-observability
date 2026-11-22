@@ -71,7 +71,7 @@ tests:
         exp_alerts:
           - exp_labels: {severity: ticket, area: ai, job: macmini-node, mountpoint: /System/Volumes/Data}
             exp_annotations:
-              summary: "/System/Volumes/Data on the Mac mini has less than 10% free."
+              summary: A data volume on the Mac mini has less than 10% free (the mountpoint label and the dashboard say which).
 
   # The run's last push was 10 minutes ago (the pusher died without sending 0): stale, so the alert fires again.
   - interval: 1m
