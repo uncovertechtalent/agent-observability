@@ -108,10 +108,6 @@ ollama_image=$(docker build -q ollama-exporter)
 docker run --rm -v "$PWD/ollama-exporter:/src:ro" -w /src -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python "$ollama_image" \
   -m unittest test_exporter
 
-echo "== stance battery driver offline test (stdlib only)"
-docker run --rm -v "$PWD/client/battery:/app:ro" -w /app -e PYTHONDONTWRITEBYTECODE=1 "$PY_IMAGE" \
-  python -I test_battery.py
-
 echo "== aws-cost-exporter offline test (stdlib only)"
 docker run --rm -v "$PWD/aws-cost-exporter:/app:ro" -w /app -e PYTHONDONTWRITEBYTECODE=1 "$PY_IMAGE" \
   python -I test_exporter.py

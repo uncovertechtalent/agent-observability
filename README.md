@@ -122,8 +122,6 @@ The `node` and `nvidia-gpu` scrape jobs expect [node_exporter](https://github.co
 
 **Mac mini LLM box.** Exporter, Ollama and resident up; memory pressure level, RAM used, uptime; the loaded models from `/api/ps`; LM Studio, OpenCode and ping probes; memory (used, wired, compressed, swap), pressure, CPU and GPU busy, temperature, power; free space per data volume and disk throughput. Internal.
 
-**Stance battery.** Runs, calls, cost and cut-off answers; the arms with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign requests, facts without pressure; cost per arm and the OpenRouter key against its limit; finish reasons, decode speed, latency, tokens. Internal.
-
 **Local LLM (Ollama).** SLO stats, a time-to-first-token heatmap, p50/p95 by model, decode tokens per second, model load time, token throughput, resident models with their GPU/CPU split, GPU utilisation next to host CPU. The pairing answers the usual question for a small GPU: whether a slow model is slow because it spilled to CPU.
 
 **Claude Code agents.** Spend by model, by source (main loop, subagent, auxiliary) and by skill or agent, with the spend alert's USD 40 threshold as a line on the cost-per-hour chart and the alert's state (below, pending, firing) on a timeline above it; tokens by type; the prompt-cache read share; requests, prompts and tool calls. All of these are sums over Claude Code's events in Loki, one per API call. Then tool calls by outcome and p95 duration, API latency and errors, permission decisions, and the slowest interactions from Tempo.
@@ -221,36 +219,6 @@ The rules and Local LLM dashboards of the Ollama next to this stack read `job="o
 
 A job on the host (uncovertechtalent-git/gitlab-home, `github-app/`) mints one-hour GitHub App installation tokens every 30 minutes into `deploy-exporter/tokens/` and `alert-issues/secrets/`. Each run writes `github_app_mint.prom` into node_exporter's textfile folder: per target whether it was minted and the mtime of its token file (by `stat`; never read). `prometheus/rules/github_app.yml` tickets when the unit fails, when its timer is not active, when a token file is older than 60 minutes (expired), and when the textfile is missing. The alert-issues token pages at 50 minutes, before it expires, because tickets go nowhere without it. The unit rules read node_exporter's systemd collector (`--collector.systemd`; on by default in Ubuntu's `prometheus-node-exporter` package, off upstream) and the ages its textfile collector (`--collector.textfile.directory`); `GitHubAppMintUnitNotWatched` tickets when the unit state is missing. The old `AlertIssuesTokenExpiring` rule (a personal token's expiry date from GitHub's response header) is retired: installation tokens carry no such header, and the gauge kept the old token's date.
 
-## The stance battery
-
-`client/battery/battery.py` runs the house's stance battery against a model on any of four backends and records every call. The battery itself is three scripts kept outside this repository and byte-identical across runs: `probe.py` (stance probes and the keyword scorer), `baseline.py` (the same facts asked without pressure) and `refusal_check.py` (two benign requests). The driver checks their sha256 against the pinned values, imports them and replaces only their `call` function, so prompts, order, repetitions and scoring stay theirs.
-
-| Backend | Where | Precision recorded from | Cost |
-|---|---|---|---|
-| `ollama` | local `/api/chat` | `/api/show` (quantization level) | none |
-| `llamacpp` | local llama.cpp server | the model file name (`/props`), or `--precision` | none |
-| `openrouter` | hosted; `--provider` pinned, no fallback | the provider's endpoint entry | per call, from the answer |
-| `featherless` | hosted, OpenAI-compatible | `--precision` (the host states none per call) | per call, from the answer (`usage.cost`) |
-
-One line per call goes to `calls_<arm>.jsonl` in `--out`: arm, backend, provider that answered, model, precision, think setting, prompt, completion and reasoning tokens, reasoning and answer length, cost, latency, decode speed where the server gives it, finish reason. The scripts write their own results under `results/`, as before.
-
-With `--otlp http://your-host:4318` (or `BATTERY_OTLP_ENDPOINT`) the driver pushes to Alloy as OTLP/HTTP JSON, standard library only: each call and each scored answer (label and score, never the text) as a Loki event under `service_name="stance-battery"`, and counters and gauges to Prometheus (`battery_run_active`, `battery_calls_total`, `battery_tokens_total`, `battery_cost_usd_total`, `battery_decode_tokens_per_second`, and the OpenRouter key's `battery_key_limit_usd`, `battery_key_usage_usd`, `battery_key_remaining_usd`, read at the start, every 20 calls and the end). A failed push is reported once and the run goes on; the local files are the record.
-
-Keys are read from `~/.config/<service>/api-key`, refused unless mode 600, and used only in the Authorization header: never printed, logged, labelled or written. Run hosted arms from a machine that holds the key; local arms run on the model box itself (`--host` names it on every series, `macmini` for the Mac mini, which mutes `MacMiniResidentNotLoaded` while a run is active).
-
-```bash
-# local, on the box, thinking off, the three cells
-python3 battery.py --arm q38-heretic-off --backend ollama --model abl-q38-heretic-128k:latest \
-    --scripts ~/battery-scripts --out ~/runs/2026-11-23 --host macmini --otlp http://your-host:4318
-# hosted, provider pinned, lowest reasoning effort
-python3 battery.py --arm glm53-zai --backend openrouter --model z-ai/glm-5.3 --provider Z.AI --think low \
-    --scripts ~/battery-scripts --out ~/runs/2026-11-23 --otlp http://your-host:4318
-```
-
-`--cells smoke` makes one call first. `python3 client/battery/test_battery.py` tests the driver offline against fake backends and a fake collector, with stand-in scripts.
-
-Dashboard "Stance battery" (uid `battery`, internal): runs, calls, cost, cut-off answers; one row per arm with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign comply or refuse, facts held without pressure; cost per arm and the OpenRouter key's spend against its limit; finish reasons, decode speed, latency, tokens. The hand read of the answers stays manual. Alerts (`prometheus/rules/battery.yml`, tickets): a run active with no call for 30 minutes, and a hosted key under 10% of its limit. Decode speed is not alerted: it depends on the model and the backend.
-
 ## Layout
 
 ```
@@ -280,8 +248,6 @@ aws-cost-exporter/               AWS spend from the cost and usage report in S3 
 client/claude-code.env           Claude Code telemetry settings
 client/searxng_exporter.py       SearXNG health, pushed as OTLP from the machine that runs it
 client/searxng-exporter.plist    launchd agent for it (macOS)
-client/battery/                  the stance battery driver: four backends, a record per call, OTLP to Alloy; offline tests
-prometheus/rules/battery.yml     the stance battery: stalled run, hosted key near its limit
 scripts/load.sh                  demo load
 scripts/check-alerting.sh        promtool, amtool and route checks; receiver unit tests
 ```
