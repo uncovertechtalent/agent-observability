@@ -123,11 +123,9 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}   # read access to the repos and their Actions; private repos need it
       - GITHUB_TOKEN_UNCOVERTECHTALENT_GIT=${GITHUB_TOKEN_UNCOVERTECHTALENT_GIT:-}   # repos of the uncovertechtalent-git organisation (a fine-grained token covers one owner)
       - GITHUB_TOKEN_OWNER=${GITHUB_TOKEN_OWNER:-uncovertechtalent}   # owner covered by GITHUB_TOKEN; each other owner needs its own line above
-      - GITHUB_TOKEN_DIR=/tokens   # one file per owner, renewed outside (GitHub App, one-hour tokens); wins over the variables
       - LOKI_URL=http://loki:3100
     volumes:
       - deploy_exporter_data:/data
-      - ./deploy-exporter/tokens:/tokens:ro   # files mode 600, owned by 65534 (the container runs as nobody)
     ports:
       - "9201:9201"
     depends_on: [loki]
