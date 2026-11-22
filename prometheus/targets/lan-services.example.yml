@@ -1,3 +1,8 @@
 # TCP services to connect to (the tcp_connect module). Copy to lan-services.local.yml. A target is address:port.
 - targets: ["192.0.2.10:8080"]
   labels: {name: dashboard, role: web}
+# The Mac mini LLM box: LM Studio and the OpenCode web UI. Names start with macmini- so a box outage mutes them.
+- targets: ["192.0.2.25:1234"]
+  labels: {name: macmini-lmstudio, role: llm}
+- targets: ["192.0.2.25:4096"]
+  labels: {name: macmini-opencode, role: llm}

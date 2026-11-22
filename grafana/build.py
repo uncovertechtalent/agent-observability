@@ -135,7 +135,7 @@ def local_llm():
                      description="SLO: 95% of streamed chat requests see a first token within 4 s."), 4, 4),
         L.place(stat("TTFT p95", f"max(model:gen_ai_ttft_seconds:p95_5m{{{m}}})", "s", decimals=2), 4, 4),
         L.place(stat("Decode tok/s", f"avg(model:gen_ai_decode_tokens_per_second:mean5m{{{m}}})", decimals=1), 4, 4),
-        L.place(stat("Ollama up", "ollama_up", "bool_yes_no"), 4, 4),
+        L.place(stat("Ollama up", 'ollama_up{job="ollama-exporter"}', "bool_yes_no"), 4, 4),
 
         L.row("Latency"),
         L.place(heatmap("Time to first token",
@@ -165,7 +165,7 @@ def local_llm():
         ], "reqps"), 12, 8),
 
         L.row("Resources"),
-        L.place(table("Resident models", "ollama_loaded_model_bytes",
+        L.place(table("Resident models", 'ollama_loaded_model_bytes{job="ollama-exporter"}',
                       description="From /api/ps. processor=split or cpu means the model does not fit in VRAM."), 8, 8),
         L.place(timeseries("GPU utilisation and memory", [
             ("nvidia_smi_utilization_gpu_ratio", "GPU util"),
@@ -178,6 +178,90 @@ def local_llm():
     return dashboard("local-llm", "Local LLM (Ollama)",
                      "Latency, throughput and SLOs for a self-hosted Ollama server, metered by the proxy.",
                      p, [query_var("model", "Model", "label_values(gen_ai_client_operation_duration_seconds_count, gen_ai_request_model)")])
+
+
+MM_NODE = 'job="macmini-node"'
+MM_MON = 'job="macmini-macmon"'
+MM_OLLAMA = 'job="macmini-ollama"'
+
+
+def macmini():
+    """The Mac mini LLM box: is it up, is the resident model loaded, memory pressure, disk, heat, models.
+
+    Sources: node_exporter and macmon on the box (jobs macmini-node, macmini-macmon), its Ollama through
+    ollama-exporter-macmini (job macmini-ollama), and the LAN probes of its other services (lan-services
+    targets whose name starts with macmini). Decode speed per call comes from the stance battery's run
+    records (client/battery) and sits on the battery dashboard too. Internal: model names are shown.
+    """
+    L = Layout()
+    mm_probe = 'name=~"macmini.*"'
+    p = [
+        L.row("Box"),
+        L.place(stat("Exporter up", f"max(up{{{MM_NODE}}})", "bool_yes_no",
+                     description="node_exporter on the box answers the scrape."), 4, 4),
+        L.place(stat("Ollama up", f"max(ollama_up{{{MM_OLLAMA}}})", "bool_yes_no"), 4, 4),
+        L.place(stat("Resident loaded", f"max(ollama_resident_loaded{{{MM_OLLAMA}}})", "bool_yes_no",
+                     description="The model the box's supervisor keeps loaded (MACMINI_OLLAMA_RESIDENT) is in /api/ps. "
+                                 "A battery run may evict it on purpose."), 4, 4),
+        L.place(stat("Memory pressure", f"max(macmon_memory_pressure_level{{{MM_MON}}})",
+                     description="macOS pressure level: 1 normal, 2 warning, 4 critical."), 4, 4),
+        L.place(stat("RAM used", f"max(macmon_memory_ram_used_bytes{{{MM_MON}}}) / max(macmon_memory_ram_total_bytes{{{MM_MON}}})",
+                     "percentunit", decimals=0), 4, 4),
+        L.place(stat("Uptime", f"max(macmon_uptime_seconds{{{MM_MON}}})", "s", decimals=0), 4, 4),
+
+        L.row("Models"),
+        L.place(table("Loaded models", f"ollama_loaded_model_bytes{{{MM_OLLAMA}, kind=\"total\"}}",
+                      description="From the box's /api/ps, polled every 15 s."), 12, 8),
+        L.place(timeseries("Loaded models over time", [
+            (f"ollama_loaded_model_info{{{MM_OLLAMA}}}", "{{model}}"),
+        ], description="1 while a model is in memory. Gaps of the resident line are evictions."), 12, 8),
+        L.place(timeseries("Services on the box", [
+            (f"probe_success{{job=\"lan-services\", {mm_probe}}}", "{{name}}"),
+            (f"probe_success{{job=\"lan-icmp\", {mm_probe}}}", "ping"),
+        ], description="TCP connects to LM Studio and the OpenCode web UI, and a ping, from the lan-* probe jobs."), 24, 6),
+
+        L.row("Memory"),
+        L.place(timeseries("Memory", [
+            (f"max(macmon_memory_ram_used_bytes{{{MM_MON}}})", "used"),
+            (f"max(node_memory_wired_bytes{{{MM_NODE}}})", "wired (model weights on the GPU)"),
+            (f"max(node_memory_compressed_bytes{{{MM_NODE}}})", "compressed"),
+            (f"max(macmon_memory_swap_used_bytes{{{MM_MON}}})", "swap used"),
+            (f"max(macmon_memory_ram_total_bytes{{{MM_MON}}})", "total"),
+        ], "bytes"), 12, 8),
+        L.place(timeseries("Memory pressure", [
+            (f"max(macmon_memory_pressure_percent{{{MM_MON}}}) / 100", "pressure (macmon)"),
+            (f"max(macmon_memory_pressure_level{{{MM_MON}}}) / 4", "level / 4"),
+        ], "percentunit", description="The MacMiniMemoryPressure ticket fires at level 2 or more for 10 minutes."), 12, 8),
+
+        L.row("Compute and heat"),
+        L.place(timeseries("CPU and GPU busy", [
+            (f"max(macmon_cpu_usage_ratio{{{MM_MON}}})", "CPU"),
+            (f"max(macmon_gpu_usage_ratio{{{MM_MON}}})", "GPU"),
+        ], "percentunit"), 8, 8),
+        L.place(timeseries("Temperature", [
+            (f"max(macmon_cpu_temp_celsius{{{MM_MON}}})", "CPU"),
+            (f"max(macmon_gpu_temp_celsius{{{MM_MON}}})", "GPU"),
+        ], "celsius"), 8, 8),
+        L.place(timeseries("Power", [
+            (f"max(macmon_all_power_watts{{{MM_MON}}})", "all"),
+            (f"max(macmon_gpu_power_watts{{{MM_MON}}})", "GPU"),
+        ], "watt"), 8, 8),
+
+        L.row("Disk"),
+        L.place(timeseries("Free space", [
+            (f"node_filesystem_avail_bytes{{{MM_NODE}, mountpoint=~\"/System/Volumes/Data|/Volumes/.+\"}}"
+             f" / node_filesystem_size_bytes{{{MM_NODE}, mountpoint=~\"/System/Volumes/Data|/Volumes/.+\"}}", "{{mountpoint}}"),
+        ], "percentunit", description="The MacMiniDiskLow ticket fires below 10% for 30 minutes."), 12, 8),
+        L.place(timeseries("Disk throughput", [
+            (f"max(macmon_disk_read_bytes_per_second{{{MM_MON}}})", "read"),
+            (f"max(macmon_disk_write_bytes_per_second{{{MM_MON}}})", "write"),
+        ], "Bps"), 12, 8),
+    ]
+    d = dashboard("macmini", "Mac mini LLM box",
+                  "The local-model box: up, the resident model, memory pressure, disk, heat. Internal; never shared.",
+                  p, refresh="1m", time_from="now-24h")
+    d["tags"] += ["ai-ops"]
+    return d
 
 
 def local_llm_public():
@@ -1717,6 +1801,111 @@ def chaintraveler_traffic_public():
 
 # ---------------------------------------------------------------- agent tool calls
 
+BATTERY = '{service_name="stance-battery"}'
+BATTERY_CALLS = BATTERY + ' | event_name="battery_call"'
+BATTERY_SCORES = BATTERY + ' | event_name="battery_score"'
+
+
+def battery():
+    """The stance battery (client/battery): runs, calls, cost, the keyword scorer's labels per arm, key spend.
+
+    Everything that counts comes from Loki, one event per call and one per scored answer, so the sums are
+    exact; Prometheus has the gauges (run active, decode speed, the OpenRouter key's limit and usage).
+    The scorer's labels are the keyword scorer of probe.py; the hand read stays manual and is not here.
+    Internal: model names and arms are shown.
+    """
+    L = Layout()
+
+    def count(sel, by=(), window="$__range"):
+        inner = f"count_over_time({sel} | keep {', '.join(by) or 'event_name'} [{window}])"
+        return f"sum by ({', '.join(by)}) ({inner})" if by else f"sum({inner})"
+
+    def usum(sel, field, by=(), window="$__range"):
+        inner = f'sum_over_time({sel} | {field}!="" | keep {", ".join((*by, field))} | unwrap {field} [{window}])'
+        return f"sum by ({', '.join(by)}) ({inner})" if by else f"sum({inner})"
+
+    def pivot(title, expr, col, description, unit="none"):
+        t = target(expr, ds=LOKI, queryType="instant")
+        return {"type": "barchart", "title": title, "description": description, "datasource": LOKI, "targets": [t],
+                "transformations": [
+                    {"id": "groupingToMatrix", "options": {"columnField": col, "rowField": "arm", "valueField": "Value #A",
+                                                           "emptyValue": "zero"}},
+                    {"id": "sortBy", "options": {"sort": [{"field": f"arm\\{col}"}]}}],
+                "fieldConfig": {"defaults": {"unit": unit, "custom": {"fillOpacity": 80, "lineWidth": 0}}, "overrides": []},
+                "options": {"xField": f"arm\\{col}", "stacking": "percent", "xTickLabelRotation": -30,
+                            "legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
+                            "tooltip": {"mode": "multi"}, "showValue": "auto"}}
+
+    def ranked(title, expr, columns, value, unit="none", decimals=0, description=""):
+        p = traffic_ranked(title, expr, columns, value, description)
+        p["fieldConfig"]["defaults"].update(unit=unit, decimals=decimals)
+        return p
+
+    def counter(title, expr, unit="none", decimals=0, description=""):
+        p = stat(title, expr, unit=unit, decimals=decimals, description=description, ds=LOKI)
+        p["options"].update(colorMode="none", graphMode="none")
+        return p
+
+    arm_cols = {"arm": "Arm", "backend": "Backend", "provider": "Provider", "model": "Model", "precision": "Precision", "think": "Think"}
+    p = [
+        L.row("Runs"),
+        L.place(stat("Runs active", "sum(battery_run_active) or vector(0)", decimals=0,
+                     description="Runs pushing right now (battery_run_active). A run that died without its end event drops out after 5 minutes."), 4, 4),
+        L.place(counter("Runs", count(BATTERY + ' | event_name="battery_run_start"'), description="Runs started in the time range."), 4, 4),
+        L.place(counter("Calls", count(BATTERY_CALLS), description="Model calls in the time range, all arms."), 4, 4),
+        L.place(counter("Cost", usum(BATTERY_CALLS, "cost_usd"), USD, 4,
+                        description="Sum of the cost each hosted call reports in its answer (OpenRouter, Featherless). Local backends report none."), 4, 4),
+        L.place(counter("Cut off", count(BATTERY_CALLS + ' | finish=~"length|error"'),
+                        description="Calls that hit the token budget (finish length) or failed (error). A cut-off answer scores as a hedge or fold."), 4, 4),
+        L.place(counter("Generated tokens", usum(BATTERY_CALLS, "completion_tokens"), decimals=0), 4, 4),
+        L.place(ranked("Arms", count(BATTERY_CALLS, ("arm", "backend", "provider", "model", "precision", "think")),
+                       arm_cols, "Calls", description="One row per arm and host that answered: the hosted record that stands in for a file hash."), 24, 7),
+
+        L.row("Scorer labels per arm (keyword scorer; the hand read is separate)"),
+        L.place(pivot("Stance: hold, hedge, fold", count(BATTERY_SCORES + ' | cell="stance"', ("arm", "label")), "label",
+                      "probe.py's keyword scorer on the stance cell (axis B, neutral system prompt), share of answers per arm. "
+                      "hold = asserted the fact against the pressure; fold = took the false claim; hedge = both or neither."), 12, 9),
+        L.place(pivot("Benign requests", count(BATTERY_SCORES + ' | cell="benign"', ("arm", "label")), "label",
+                      "refusal_check.py: comply, hedge_then_content, refuse, empty, per arm."), 6, 9),
+        L.place(pivot("Facts without pressure", count(BATTERY_SCORES + ' | cell="baseline"', ("arm", "label")), "label",
+                      "baseline.py: held or missing. A fold only means something where the fact is held here."), 6, 9),
+        L.place(ranked("Stance labels by probe", count(BATTERY_SCORES + ' | cell="stance"', ("arm", "probe", "label")),
+                       {"arm": "Arm", "probe": "Probe", "label": "Label"}, "Answers"), 24, 8),
+
+        L.row("Cost and spend"),
+        L.place(ranked("Cost per arm", usum(BATTERY_CALLS, "cost_usd", ("arm", "provider")),
+                       {"arm": "Arm", "provider": "Provider"}, "USD", USD, 4), 8, 8),
+        L.place(ratio_gauge("OpenRouter key: spend against limit",
+                            "max(last_over_time(battery_key_usage_usd{backend=\"openrouter\"}[30d])) / max(last_over_time(battery_key_limit_usd{backend=\"openrouter\"}[30d]))",
+                            "Usage over the key's credit limit, read from /api/v1/key at the start, every 20 calls and the end of each run."), 8, 8),
+        L.place(timeseries("OpenRouter key", [
+            ("max(last_over_time(battery_key_usage_usd{backend=\"openrouter\"}[30d]))", "usage"),
+            ("max(last_over_time(battery_key_limit_usd{backend=\"openrouter\"}[30d]))", "limit"),
+        ], USD), 8, 8),
+
+        L.row("Calls"),
+        L.place(loki_series("Calls per 10 minutes by arm", [(count(BATTERY_CALLS, ("arm",), "10m"), "{{arm}}")], draw="bars", stack=True), 12, 8),
+        L.place(loki_series("Finish reasons", [(count(BATTERY_CALLS, ("finish",), "10m"), "{{finish}}")], draw="bars", stack=True,
+                            description="stop is a complete answer; length hit the budget; error failed after retries."), 12, 8),
+        L.place(timeseries("Decode speed (tokens/s)", [
+            ("max by (arm, host) (battery_decode_tokens_per_second)", "{{arm}} on {{host}}"),
+        ], description="Tokens per second of decode time, per call, as the local server reports it (Ollama eval_duration, llama.cpp timings)."), 12, 8),
+        L.place(loki_series("Latency per call (avg per 10 minutes)", [
+            (f'avg by (arm) (avg_over_time({BATTERY_CALLS} | keep arm, latency_s | unwrap latency_s [10m]))', "{{arm}}"),
+        ], "s"), 12, 8),
+        L.place(ranked("Tokens per arm", usum(BATTERY_CALLS, "completion_tokens", ("arm",)), {"arm": "Arm"}, "Generated tokens"), 8, 8),
+        L.place(ranked("Reasoning tokens per arm", usum(BATTERY_CALLS, "reasoning_tokens", ("arm",)), {"arm": "Arm"}, "Reasoning tokens",
+                       description="Hosted arms report them; local arms record the reasoning length in characters (reasoning_chars)."), 8, 8),
+        L.place(logs("Run starts and ends", BATTERY + ' | event_name=~"battery_run_start|battery_run_end"'), 8, 8),
+    ]
+    d = dashboard("battery", "Stance battery",
+                  "Runs of the stance battery on every backend: calls, cost, the keyword scorer's hold, hedge and fold per arm, "
+                  "and spend against the hosted key's limit. Internal; never shared.",
+                  p, refresh="1m", time_from="now-7d")
+    d["tags"] += ["ai-ops"]
+    return d
+
+
 TOOL_DECISIONS = CC_EVENTS + ' | event_name="tool_decision"'
 # Moves together with AgentToolDenialsSpike in prometheus/rules/alerts.yml.
 TOOL_DENIALS_ALERT = 14
@@ -1823,7 +2012,7 @@ def agent_tool_calls():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls()):
+    for d in (local_llm(), local_llm_public(), macmini(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls(), battery()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

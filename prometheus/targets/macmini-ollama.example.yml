@@ -1,0 +1,4 @@
+# The box's Ollama, through the ollama-exporter-macmini container (compose profile "macmini").
+# Copy to macmini-ollama.local.yml once COMPOSE_PROFILES includes macmini.
+- targets: ["ollama-exporter-macmini:11435"]
+  labels: {host: macmini}

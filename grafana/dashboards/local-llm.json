@@ -278,7 +278,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ollama_up",
+          "expr": "ollama_up{job=\"ollama-exporter\"}",
           "refId": "A"
         }
       ],
@@ -693,7 +693,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ollama_loaded_model_bytes",
+          "expr": "ollama_loaded_model_bytes{job=\"ollama-exporter\"}",
           "refId": "A",
           "instant": true,
           "format": "table"

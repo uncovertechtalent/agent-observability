@@ -1,0 +1,3 @@
+# macmon (Apple Silicon metrics) on the Mac mini LLM box. Copy to macmini-macmon.local.yml.
+- targets: ["192.0.2.25:9102"]
+  labels: {host: macmini}
