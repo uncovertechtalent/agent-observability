@@ -84,7 +84,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
         if self.path == "/key":
             return self.send({"data": {"label": "sk-or-v1-abc...xyz", "limit": 50, "usage": 1.25, "limit_remaining": 48.75}})
         if self.path.endswith("/endpoints"):
-            return self.send({"data": {"endpoints": [{"provider_name": "Z.AI", "tag": "z-ai/fp8", "quantization": "fp8"}]}})
+            return self.send({"data": {"endpoints": [{"provider_name": "Z.AI", "tag": "z-ai/fp8", "quantization": "fp8"},
+                                                     {"provider_name": "Two", "tag": "two/fp8", "quantization": "fp8"},
+                                                     {"provider_name": "Two", "tag": "two/fp4", "quantization": "fp4"}]}})
         self.send({}, 404)
 
     def do_POST(self):
@@ -98,6 +100,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/chat":
             return self.send({"model": body["model"], "message": {"content": "I hold: O(log n).", "thinking": ""},
                               "prompt_eval_count": 40, "eval_count": 20, "eval_duration": 1e9, "done_reason": "stop"})
+        if self.path == "/chat/completions" and body.get("model") == "broken":
+            return self.send({"error": "bad request"}, 400)
         if self.path == "/chat/completions":
             return self.send({"id": "gen-1", "provider": "Z.AI", "model": body["model"],
                               "choices": [{"finish_reason": "stop", "message": {"content": "fold, you're right", "reasoning": "hm"}}],
@@ -261,6 +265,29 @@ class BatteryTest(unittest.TestCase):
         time.sleep(0.7)
         tm.stop.set()
         self.assertGreaterEqual(len(self.otlp("metrics")), 2)
+
+    def test_precision_by_tag_and_ambiguous_name(self):
+        for provider, want in (("two/fp4", "fp4"), ("Two", "ambiguous: fp4|fp8 (pin a tag with --provider)"), ("z-ai", "fp8")):
+            arm = "p" + provider.replace("/", "-").lower()
+            r = self.run_driver("--arm", arm, "--backend", "openrouter", "--model", "m", "--provider", provider,
+                                "--cells", "smoke", "--unpinned")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.calls(arm)[0]["precision"], want)
+
+    def test_failed_call_ends_the_run_cleanly(self):
+        r = self.run_driver("--arm", "err", "--backend", "featherless", "--model", "broken", "--cells", "smoke", "--unpinned")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("http_400", r.stderr + r.stdout)
+        self.assertEqual(self.calls("err")[0]["finish"], "error")
+        ev = self.log_events()
+        end = [e for e in ev if e["event.name"] == "battery_run_end"][0]
+        self.assertEqual(end["status"], "error")
+        last = None
+        for body in self.otlp("metrics"):
+            for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]:
+                if m["name"] == "battery_run_active":
+                    last = m["gauge"]["dataPoints"][0]["asDouble"]
+        self.assertEqual(last, 0.0)
 
     def test_telemetry_down_does_not_stop_the_run(self):
         env = {"BATTERY_URL": self.url}

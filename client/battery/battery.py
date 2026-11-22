@@ -201,11 +201,14 @@ class Backend:
             if self.kind == "openrouter":
                 eps = self._request("GET", f"/models/{self.args.model}/endpoints", None, 30).get("data", {}).get("endpoints", [])
                 want = (self.args.provider or "").lower()
-                for ep in eps:
-                    names = {str(ep.get("provider_name", "")).lower(), str(ep.get("tag", "")).split("/")[0].lower()}
-                    if want and want in names:
-                        return ep.get("quantization") or "not stated"
-                return "not stated"
+                # --provider may be a provider name ("Z.AI"), its slug ("z-ai") or a full endpoint tag ("z-ai/fp8").
+                # A name that matches endpoints with different precisions cannot say which one answered.
+                quants = sorted({str(ep.get("quantization") or "not stated") for ep in eps if want and want in {
+                    str(ep.get("provider_name", "")).lower(), str(ep.get("tag", "")).lower(),
+                    str(ep.get("tag", "")).split("/")[0].lower()}})
+                if len(quants) > 1:
+                    return "ambiguous: " + "|".join(quants) + " (pin a tag with --provider)"
+                return quants[0] if quants else "not stated"
         except Exception as exc:
             print(f"precision lookup failed ({type(exc).__name__}); recorded as 'not stated'", file=sys.stderr, flush=True)
         return "not stated"

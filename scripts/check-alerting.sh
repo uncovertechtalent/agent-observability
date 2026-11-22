@@ -103,6 +103,10 @@ docker run --rm -v "$PWD/pager:/src:ro" -w /src -e PYTHONDONTWRITEBYTECODE=1 --e
 docker run --rm -v "$PWD/pager:/etc/pager:ro" --entrypoint python "$pager_image" -c \
   "import core, yaml; r = core.Rotation(yaml.safe_load(open('/etc/pager/rotation.yml'))); print('rotation.yml ok:', ', '.join(r.schedules))"
 
+echo "== stance battery driver offline test (stdlib only)"
+docker run --rm -v "$PWD/client/battery:/app:ro" -w /app -e PYTHONDONTWRITEBYTECODE=1 "$PY_IMAGE" \
+  python -I test_battery.py
+
 echo "== aws-cost-exporter offline test (stdlib only)"
 docker run --rm -v "$PWD/aws-cost-exporter:/app:ro" -w /app -e PYTHONDONTWRITEBYTECODE=1 "$PY_IMAGE" \
   python -I test_exporter.py
