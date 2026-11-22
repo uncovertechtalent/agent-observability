@@ -5,3 +5,5 @@
   labels: {name: gateway, role: gateway}
 - targets: [192.0.2.10]
   labels: {name: file-server, role: nas}
+- targets: ["192.0.2.25"]
+  labels: {name: macmini, role: llm-box}
