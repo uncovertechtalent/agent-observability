@@ -33,10 +33,35 @@ def token_var(owner):
     return "GITHUB_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", owner.upper())
 
 
+# GITHUB_TOKEN_DIR, when set, holds one file per owner (<dir>/<owner>) with a short-lived token that a
+# job outside the container renews (GitHub App installation tokens live one hour). The file is read on
+# every request, so a renewed token is used without a restart. A file wins over the variables above.
+TOKEN_DIR = os.environ.get("GITHUB_TOKEN_DIR", "")
+
+
+def token_file(owner):
+    if not TOKEN_DIR or not re.fullmatch(r"[A-Za-z0-9-]+", owner):  # GitHub owner names; no path tricks
+        return ""
+    path = os.path.join(TOKEN_DIR, owner.lower())
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except OSError as e:  # there but unreadable: a mount or ownership mistake, not a token that is still to come
+        if path not in _UNREADABLE_WARNED:
+            _UNREADABLE_WARNED.add(path)
+            log(f"token file {path} exists but cannot be read ({type(e).__name__}); falling back to the variables")
+        return ""
+
+
+_UNREADABLE_WARNED = set()  # one line per file, not one per request
+
+
 def token_for(path):
     parts = path.lstrip("/").split("/")
     if len(parts) > 1 and parts[0] == "repos":
-        return os.environ.get(token_var(parts[1])) or TOKEN
+        return token_file(parts[1]) or os.environ.get(token_var(parts[1])) or TOKEN
     return TOKEN
 LOKI = os.environ.get("LOKI_URL", "http://loki:3100")
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
@@ -306,6 +331,11 @@ if __name__ == "__main__":
     for cfg in SITES:
         owner = cfg["repo"].split("/")[0]
         var = token_var(owner)
+        if token_file(owner):
+            log(f"{cfg['site']}: token from {TOKEN_DIR}/{owner.lower()} (read on every request)")
+            continue
+        if TOKEN_DIR:
+            log(f"{cfg['site']}: no file {TOKEN_DIR}/{owner.lower()} yet; using {var} or GITHUB_TOKEN until it appears")
         if not os.environ.get(var) and not TOKEN:
             log(f"{cfg['site']}: no token ({var} or GITHUB_TOKEN); job logs fail"
                 + ("" if cfg.get("public") else ", and so do the runs of this private repo"))
