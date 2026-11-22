@@ -33,6 +33,7 @@ import re
 import runpy
 import socket
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -99,18 +100,33 @@ class Telemetry:
         self.logs, self.counters, self.gauges = [], {}, {}
         self.warned = set()
         self.pushes = self.failures = 0
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+
+    def heartbeat(self, every=30):
+        """Push the current gauges and counters every `every` seconds, so a run stays visible (and
+        battery_run_active stays 1) while one call takes minutes. Daemon thread; ends with stop."""
+        if not self.endpoint:
+            return
+        def loop():
+            while not self.stop.wait(every):
+                self.flush()
+        threading.Thread(target=loop, name="telemetry-heartbeat", daemon=True).start()
 
     def log(self, event, attrs):
         if self.endpoint:
-            self.logs.append({"timeUnixNano": str(time.time_ns()), "severityText": "INFO",
-                              "body": {"stringValue": event}, "attributes": _attrs({"event.name": event, **attrs})})
+            with self.lock:
+                self.logs.append({"timeUnixNano": str(time.time_ns()), "severityText": "INFO",
+                                  "body": {"stringValue": event}, "attributes": _attrs({"event.name": event, **attrs})})
 
     def add(self, name, labels, v=1.0):
         key = (name, tuple(sorted(labels.items())))
-        self.counters[key] = self.counters.get(key, 0.0) + float(v)
+        with self.lock:
+            self.counters[key] = self.counters.get(key, 0.0) + float(v)
 
     def set(self, name, labels, v):
-        self.gauges[(name, tuple(sorted(labels.items())))] = float(v)
+        with self.lock:
+            self.gauges[(name, tuple(sorted(labels.items())))] = float(v)
 
     def _post(self, path, body):
         req = urllib.request.Request(self.endpoint + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
@@ -126,17 +142,19 @@ class Telemetry:
     def flush(self):
         if not self.endpoint:
             return
-        if self.logs:
+        with self.lock:
+            logs, self.logs = self.logs, []
+            counters, gauges = dict(self.counters), dict(self.gauges)
+        if logs:
             self._post("/v1/logs", {"resourceLogs": [{"resource": self.resource, "scopeLogs": [
-                {"scope": {"name": "stance-battery"}, "logRecords": self.logs}]}]})
-            self.logs = []
+                {"scope": {"name": "stance-battery"}, "logRecords": logs}]}]})
         now = str(time.time_ns())
         metrics = {}
-        for (name, labels), v in self.counters.items():
+        for (name, labels), v in counters.items():
             m = metrics.setdefault(name, {"name": name, "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": []}})
             m["sum"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "startTimeUnixNano": str(self.start_ns),
                                            "timeUnixNano": now, "asDouble": v})
-        for (name, labels), v in self.gauges.items():
+        for (name, labels), v in gauges.items():
             m = metrics.setdefault(name, {"name": name, "gauge": {"dataPoints": []}})
             m["gauge"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "timeUnixNano": now, "asDouble": v})
         if metrics:
@@ -151,8 +169,12 @@ class Backend:
     def __init__(self, args):
         self.args = args
         self.kind = args.backend
-        self.url = (os.environ.get("BATTERY_URL") or BACKENDS[self.kind]["url"]).rstrip("/")
         self.hosted = BACKENDS[self.kind]["hosted"]
+        self.url = (os.environ.get("BATTERY_URL") or BACKENDS[self.kind]["url"]).rstrip("/")
+        if self.hosted and os.environ.get("BATTERY_URL"):
+            # A hosted backend sends its key to this URL: an override must be https, or loopback (tests).
+            if not re.match(r"^(https://|http://(127\.0\.0\.1|localhost|\[::1\])[:/])", self.url + "/"):
+                raise SystemExit(f"BATTERY_URL for {self.kind} must be https:// or loopback; the API key would go there")
         self.key = read_key(BACKENDS[self.kind]["key"]) if self.hosted else None
         self.think = args.think
         self.precision = args.precision or self.lookup_precision()
@@ -289,7 +311,8 @@ class Run:
 
     def base_record(self):
         return {"run_id": self.id, "arm": self.args.arm, "backend": self.args.backend, "model_requested": self.args.model,
-                "precision": self.backend.precision, "think": self.args.think, "host": self.args.host}
+                "precision": self.backend.precision, "think": self.args.think, "host": self.args.host,
+                "pinned": not self.args.unpinned}
 
     def call(self, messages, temp, max_tokens):
         try:
@@ -436,6 +459,7 @@ def main(argv=None):
         tm.add("battery_calls", {**run.labels, "cell": c, "finish": "stop"}, 0)  # a zero first, so increase() sees the first call
     run.key_limits()
     tm.flush()
+    tm.heartbeat()
     t_run, status = time.time(), "error"
     try:
         for name, fn in (("smoke", smoke), ("stance", stance), ("benign", benign), ("baseline", base)):
@@ -453,6 +477,7 @@ def main(argv=None):
             print(f"{time.strftime('%H:%M:%S')} END {args.arm} {name} {round(time.time() - t0)}s", flush=True)
         status = "done"
     finally:
+        tm.stop.set()
         run.key_limits()
         tm.set("battery_run_active", run.labels, 0)
         tm.log("battery_run_end", {**run.base_record(), "status": status, "calls": run.calls, "seconds": round(time.time() - t_run)})

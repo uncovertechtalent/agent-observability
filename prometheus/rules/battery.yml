@@ -7,6 +7,8 @@ groups:
   - name: battery
     rules:
       # A run says it is active but has made no call for 30 minutes: a hung backend or a stuck request.
+      # The driver pushes every 30 s from a heartbeat thread, so battery_run_active stays fresh during a
+      # long call; a run that died without sending 0 drops out after 5 minutes and is not this alert.
       # The longest single call so far (thinking on, 8,192 tokens) took under 10 minutes.
       - alert: BatteryRunStalled
         expr: |

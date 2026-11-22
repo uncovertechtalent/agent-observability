@@ -16,6 +16,7 @@ import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 DRIVER = os.path.join(HERE, "battery.py")
 FAKE_KEY = "sk-test-0123456789abcdef-must-never-leave"
 
@@ -176,8 +177,8 @@ class BatteryTest(unittest.TestCase):
         for k in ("backend", "provider", "model", "precision", "think", "prompt_tokens", "completion_tokens",
                   "latency_s", "finish", "decode_tps", "cell", "run_id"):
             self.assertIn(k, c)
-        self.assertEqual((c["backend"], c["provider"], c["precision"], c["think"], c["decode_tps"], c["num_ctx"]),
-                         ("ollama", "local", "Q4_K_M", "off", 20.0, 16384))
+        self.assertEqual((c["backend"], c["provider"], c["precision"], c["think"], c["decode_tps"], c["num_ctx"], c["pinned"]),
+                         ("ollama", "local", "Q4_K_M", "off", 20.0, 16384, False))
         chats = [s[3] for s in Fake.seen if s[1] == "/api/chat"]
         self.assertEqual(chats[0]["think"], False)
         self.assertEqual(chats[0]["options"]["num_predict"], 600)
@@ -242,6 +243,24 @@ class BatteryTest(unittest.TestCase):
         r = self.run_driver("--arm", "fl2", "--backend", "featherless", "--model", "m", "--cells", "smoke", "--unpinned")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("chmod 600", r.stderr + r.stdout)
+
+    def test_hosted_url_override_must_be_https_or_loopback(self):
+        r = self.run_driver("--arm", "x", "--backend", "openrouter", "--model", "m", "--provider", "P", "--cells", "smoke",
+                            "--unpinned", extra_env={"BATTERY_URL": "http://192.0.2.9:8099"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("must be https:// or loopback", r.stderr + r.stdout)
+        self.assertFalse([s for s in Fake.seen if s[1] == "/chat/completions"])
+
+    def test_heartbeat_pushes_while_a_call_is_slow(self):
+        import battery  # noqa: E402  (in-process: the heartbeat thread)
+        tm = battery.Telemetry(self.url, "h")
+        tm.set("battery_run_active", {"arm": "a"}, 1)
+        Fake.seen = []
+        tm.heartbeat(every=0.2)
+        import time
+        time.sleep(0.7)
+        tm.stop.set()
+        self.assertGreaterEqual(len(self.otlp("metrics")), 2)
 
     def test_telemetry_down_does_not_stop_the_run(self):
         env = {"BATTERY_URL": self.url}
