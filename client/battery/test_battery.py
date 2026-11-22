@@ -229,7 +229,7 @@ class BatteryTest(unittest.TestCase):
         self.assertNotIn(FAKE_KEY, everything)
         self.assertNotIn("sk-or-v1", everything)  # the key's label is not copied either
 
-    def test_featherless_think_off_and_no_cost(self):
+    def test_featherless_think_off(self):
         r = self.run_driver("--arm", "fl1", "--backend", "featherless", "--model", "org/model", "--cells", "smoke",
                             "--precision", "fp8", "--unpinned")
         self.assertEqual(r.returncode, 0, r.stderr)

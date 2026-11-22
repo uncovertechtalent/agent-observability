@@ -10,7 +10,7 @@ Backends:
   ollama       local Ollama /api/chat; precision from /api/show; decode speed from eval_duration
   llamacpp     local llama.cpp server /v1/chat/completions; precision from the model file name (/props)
   openrouter   hosted; provider pinned (no fallback); cost per call; key limit and usage from /api/v1/key
-  featherless  hosted, OpenAI-compatible; no per-call cost in the answer
+  featherless  hosted, OpenAI-compatible; cost per call when the answer carries it (usage.cost, seen 2026-11-22)
 
 Every call writes one line to calls_<arm>.jsonl in --out: backend, provider, model, precision, think,
 tokens, reasoning tokens, cost, latency, finish reason. With an OTLP endpoint (--otlp or

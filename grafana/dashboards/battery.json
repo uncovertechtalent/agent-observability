@@ -163,7 +163,7 @@
     {
       "type": "stat",
       "title": "Cost",
-      "description": "Sum of the cost each hosted call reports (OpenRouter). Local backends and Featherless report none.",
+      "description": "Sum of the cost each hosted call reports in its answer (OpenRouter, Featherless). Local backends report none.",
       "datasource": {
         "type": "loki",
         "uid": "loki"

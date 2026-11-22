@@ -1770,7 +1770,7 @@ def battery():
         L.place(counter("Runs", count(BATTERY + ' | event_name="battery_run_start"'), description="Runs started in the time range."), 4, 4),
         L.place(counter("Calls", count(BATTERY_CALLS), description="Model calls in the time range, all arms."), 4, 4),
         L.place(counter("Cost", usum(BATTERY_CALLS, "cost_usd"), USD, 4,
-                        description="Sum of the cost each hosted call reports (OpenRouter). Local backends and Featherless report none."), 4, 4),
+                        description="Sum of the cost each hosted call reports in its answer (OpenRouter, Featherless). Local backends report none."), 4, 4),
         L.place(counter("Cut off", count(BATTERY_CALLS + ' | finish=~"length|error"'),
                         description="Calls that hit the token budget (finish length) or failed (error). A cut-off answer scores as a hedge or fold."), 4, 4),
         L.place(counter("Generated tokens", usum(BATTERY_CALLS, "completion_tokens"), decimals=0), 4, 4),

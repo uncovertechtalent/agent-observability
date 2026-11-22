@@ -211,7 +211,7 @@ It never carries a Discord ID, a channel, a label value, the summary or a URL.
 | `ollama` | local `/api/chat` | `/api/show` (quantization level) | none |
 | `llamacpp` | local llama.cpp server | the model file name (`/props`), or `--precision` | none |
 | `openrouter` | hosted; `--provider` pinned, no fallback | the provider's endpoint entry | per call, from the answer |
-| `featherless` | hosted, OpenAI-compatible | `--precision` (the host states none per call) | none per call |
+| `featherless` | hosted, OpenAI-compatible | `--precision` (the host states none per call) | per call, from the answer (`usage.cost`) |
 
 One line per call goes to `calls_<arm>.jsonl` in `--out`: arm, backend, provider that answered, model, precision, think setting, prompt, completion and reasoning tokens, reasoning and answer length, cost, latency, decode speed where the server gives it, finish reason. The scripts write their own results under `results/`, as before.
 
