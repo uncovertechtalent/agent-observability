@@ -15,14 +15,15 @@ groups:
       # The supervisor on the box reloads the resident within a minute of an eviction. A battery run may hold
       # another model for its whole run (battery_run_active, pushed by client/battery), so a run mutes this.
       - alert: MacMiniResidentNotLoaded
+        # The model label is dropped: board issues are public, and the resident's name stays on the dashboard.
         expr: |
-          ollama_resident_loaded{job="macmini-ollama"} == 0
+          max without (model) (ollama_resident_loaded{job="macmini-ollama"}) == 0
           and on() ollama_up{job="macmini-ollama"} == 1
           unless on() max(battery_run_active{host="macmini"}) == 1
         for: 15m
         labels: {severity: ticket, area: ai}
         annotations:
-          summary: "The resident model {{ $labels.model }} has not been loaded on the Mac mini for 15 minutes."
+          summary: The resident model has not been loaded on the Mac mini for 15 minutes.
 
       # macOS memory pressure (kern.memorystatus_vm_pressure_level): 1 normal, 2 warning, 4 critical.
       # Warning is normal for a few minutes while a large model loads; held for 10 minutes it means swapping.

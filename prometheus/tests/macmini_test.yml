@@ -16,9 +16,9 @@ tests:
       - eval_time: 18m
         alertname: MacMiniResidentNotLoaded
         exp_alerts:
-          - exp_labels: {severity: ticket, area: ai, job: macmini-ollama, model: "m:latest"}
+          - exp_labels: {severity: ticket, area: ai, job: macmini-ollama}
             exp_annotations:
-              summary: "The resident model m:latest has not been loaded on the Mac mini for 15 minutes."
+              summary: The resident model has not been loaded on the Mac mini for 15 minutes.
       - eval_time: 30m
         alertname: MacMiniResidentNotLoaded
         exp_alerts: []

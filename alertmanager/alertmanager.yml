@@ -93,6 +93,13 @@ inhibit_rules:
   - source_matchers: [prometheus="nas", alertname=~"LANHostDown|LANDNSDown|LANDNSSecondaryDown|LANUpstreamDNSDown"]
     target_matchers: [prometheus="agent-observability", alertname=~"LANHostDown|LANDNSDown|LANDNSSecondaryDown|LANUpstreamDNSDown"]
     equal: [alertname, name]
+  # The Mac mini off or off the network: one ticket (no ping), not one per exporter, service and model check.
+  - source_matchers: [alertname="LANHostDown", name="macmini"]
+    target_matchers: [alertname=~"ScrapeTargetDown|MacMini.+", job=~"macmini-.+"]
+    equal: [prometheus]
+  - source_matchers: [alertname="LANHostDown", name="macmini"]
+    target_matchers: [alertname="LANServiceDown", name=~"macmini-.+"]
+    equal: [prometheus]
   # A DNS server that answers nothing also fails the upstream probe: one ticket for it, from the local alert.
   - source_matchers: [alertname=~"LANDNSDown|LANDNSSecondaryDown"]
     target_matchers: [alertname="LANUpstreamDNSDown"]

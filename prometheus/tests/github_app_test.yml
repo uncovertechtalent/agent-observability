@@ -68,8 +68,26 @@ tests:
             exp_annotations:
               summary: The GitHub App token minter's timer is not active; no token will be renewed.
       - eval_time: 65m
+        alertname: GitHubAppMintUnitNotWatched
+        exp_alerts: []
+      - eval_time: 65m
         alertname: GitHubAppMintMetricsMissing
         exp_alerts:
           - exp_labels: {severity: ticket}
             exp_annotations:
               summary: The minter's textfile (github_app_mint.prom) is missing, so token ages are not watched.
+
+  # node_exporter up, no systemd collector: the unit rules cannot fire, so this tickets after an hour.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node"}'
+        values: '1x70'
+      - series: 'github_app_mint_last_run_timestamp_seconds'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: GitHubAppMintUnitNotWatched
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: github-app-mint.timer}
+            exp_annotations:
+              summary: node_exporter reports no github-app-mint.timer state (systemd collector off, or the timer removed).

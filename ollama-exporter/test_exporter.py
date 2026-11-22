@@ -1,4 +1,10 @@
-"""Offline test of the resident check. Run inside the image: docker run --rm <image> python test_exporter.py"""
+"""Offline test of the resident check, in the exporter's image (it has aiohttp and prometheus_client):
+
+    img=$(docker build -q ollama-exporter)
+    docker run --rm -v "$PWD/ollama-exporter:/src:ro" -w /src --entrypoint python "$img" -m unittest test_exporter
+
+scripts/check-alerting.sh runs it.
+"""
 import unittest
 
 from exporter import resident_loaded

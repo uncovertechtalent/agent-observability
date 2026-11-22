@@ -33,6 +33,15 @@ groups:
         annotations:
           summary: "The alert-issues token ({{ $labels.app }}, {{ $labels.owner }}) is 50 minutes old and expires within 10: tickets will stop becoming issues."
 
+      # The unit rules need node_exporter's systemd collector; without it (or with the timer removed) they have
+      # no series and stay quiet, so their absence is a ticket of its own.
+      - alert: GitHubAppMintUnitNotWatched
+        expr: absent(node_systemd_unit_state{name="github-app-mint.timer"}) and on() max(up{job="node"}) == 1
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: node_exporter reports no github-app-mint.timer state (systemd collector off, or the timer removed).
+
       - alert: GitHubAppMintMetricsMissing
         expr: absent(github_app_mint_last_run_timestamp_seconds) and on() max(up{job="node"}) == 1
         for: 1h
