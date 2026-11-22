@@ -115,19 +115,6 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # A second instance of the same exporter, pointed at the Ollama of the Mac mini LLM box (README,
-  # "The Mac mini LLM box"). Only its /api/ps poller is used: which models are loaded and whether the
-  # resident (MACMINI_OLLAMA_RESIDENT) is one of them. Compose network only; no client is proxied.
-  # Starts only with the "macmini" profile (COMPOSE_PROFILES=macmini in .env).
-  ollama-exporter-macmini:
-    profiles: [macmini]
-    build: ./ollama-exporter
-    environment:
-      - OLLAMA_UPSTREAM=${MACMINI_OLLAMA_URL:-http://localhost:11434}
-      - OLLAMA_RESIDENT=${MACMINI_OLLAMA_RESIDENT:-}
-    expose: ["11435"]
-    restart: unless-stopped
-
   # Reads the GitHub Actions deploy runs of the three websites and the sites' public
   # JSON; writes run history to Loki and serves the latest state on :9201.
   deploy-exporter:

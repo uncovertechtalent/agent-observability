@@ -67,6 +67,22 @@ tests:
         alertname: PagerFailing
         exp_alerts: []
 
+  # A token that expires 15 days after the start: quiet on day 0, a ticket from day 1.
+  - interval: 1h
+    input_series:
+      - series: 'alert_issues_github_token_expiry_timestamp_seconds{job="alert-issues", instance="alert-issues:9095"}'
+        values: '1296000x48'
+    alert_rule_test:
+      - eval_time: 0h
+        alertname: AlertIssuesTokenExpiring
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: AlertIssuesTokenExpiring
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: alert-issues, instance: "alert-issues:9095"}
+            exp_annotations:
+              summary: The GitHub token of alert-issues expires within 14 days; create a new one and replace the token file.
+
   # One Discord notification fails after its retries: a ticket, per integration; the webhook
   # counter stays flat and stays quiet.
   - interval: 1m
