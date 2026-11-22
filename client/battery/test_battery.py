@@ -289,6 +289,23 @@ class BatteryTest(unittest.TestCase):
                     last = m["gauge"]["dataPoints"][0]["asDouble"]
         self.assertEqual(last, 0.0)
 
+    def test_concurrent_flushes_keep_counters_in_order(self):
+        import battery  # noqa: E402
+        import threading as th
+        tm = battery.Telemetry(self.url, "h")
+        Fake.seen = []
+        def work():
+            for _ in range(20):
+                tm.add("battery_calls", {"arm": "a"})
+                tm.flush()
+        ts = [th.Thread(target=work) for _ in range(3)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        vals = [m["sum"]["dataPoints"][0]["asDouble"] for b in self.otlp("metrics")
+                for m in b["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] if m["name"] == "battery_calls"]
+        self.assertEqual(vals, sorted(vals))
+        self.assertEqual(vals[-1], 60.0)
+
     def test_telemetry_down_does_not_stop_the_run(self):
         env = {"BATTERY_URL": self.url}
         r = self.run_driver("--arm", "nod", "--backend", "ollama", "--model", "m", "--cells", "smoke", "--unpinned",

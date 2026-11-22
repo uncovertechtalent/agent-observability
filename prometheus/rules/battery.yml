@@ -3,6 +3,7 @@
 # and for OpenRouter the key's limit, usage and remaining credit. Between runs nothing is pushed, so these
 # rules read pushed values only, never up{} or absent(). Decode speed is on the dashboard and not alerted:
 # it depends on the model and the backend (a 122B model on the CPU decodes at 2 to 3 tokens per second by design).
+# Summaries name no arm or model: tickets become public board issues; the arm stays a label (not shown there).
 groups:
   - name: battery
     rules:
@@ -17,7 +18,7 @@ groups:
         for: 5m
         labels: {severity: ticket, area: ai}
         annotations:
-          summary: "Battery arm {{ $labels.arm }} on {{ $labels.host }} is active but made no call in 30 minutes."
+          summary: "A stance battery run on {{ $labels.host }} is active but made no call in 30 minutes."
 
       # Under 10% of the hosted key's credit left. Read at the start, every 20 calls and the end of a run,
       # so the value holds between runs (last_over_time over a week).

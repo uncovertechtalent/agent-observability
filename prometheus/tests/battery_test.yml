@@ -26,7 +26,7 @@ tests:
         exp_alerts:
           - exp_labels: {severity: ticket, area: ai, arm: a, host: h}
             exp_annotations:
-              summary: "Battery arm a on h is active but made no call in 30 minutes."
+              summary: "A stance battery run on h is active but made no call in 30 minutes."
 
   # Key read once with 4 of 50 left, then no more pushes: fires and keeps firing between runs.
   - interval: 1m

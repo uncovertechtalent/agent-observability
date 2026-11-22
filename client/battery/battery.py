@@ -100,8 +100,10 @@ class Telemetry:
         self.logs, self.counters, self.gauges = [], {}, {}
         self.warned = set()
         self.pushes = self.failures = 0
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()        # guards the buffers
+        self.flush_lock = threading.Lock()  # one flush at a time, copy through both posts, so pushes stay in order
         self.stop = threading.Event()
+        self.thread = None
 
     def heartbeat(self, every=30):
         """Push the current gauges and counters every `every` seconds, so a run stays visible (and
@@ -111,7 +113,14 @@ class Telemetry:
         def loop():
             while not self.stop.wait(every):
                 self.flush()
-        threading.Thread(target=loop, name="telemetry-heartbeat", daemon=True).start()
+        self.thread = threading.Thread(target=loop, name="telemetry-heartbeat", daemon=True)
+        self.thread.start()
+
+    def end_heartbeat(self):
+        """Stop the heartbeat and wait for a flush it may be in, so no late push carries run_active=1."""
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=30)
 
     def log(self, event, attrs):
         if self.endpoint:
@@ -142,24 +151,25 @@ class Telemetry:
     def flush(self):
         if not self.endpoint:
             return
-        with self.lock:
-            logs, self.logs = self.logs, []
-            counters, gauges = dict(self.counters), dict(self.gauges)
-        if logs:
-            self._post("/v1/logs", {"resourceLogs": [{"resource": self.resource, "scopeLogs": [
-                {"scope": {"name": "stance-battery"}, "logRecords": logs}]}]})
-        now = str(time.time_ns())
-        metrics = {}
-        for (name, labels), v in counters.items():
-            m = metrics.setdefault(name, {"name": name, "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": []}})
-            m["sum"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "startTimeUnixNano": str(self.start_ns),
-                                           "timeUnixNano": now, "asDouble": v})
-        for (name, labels), v in gauges.items():
-            m = metrics.setdefault(name, {"name": name, "gauge": {"dataPoints": []}})
-            m["gauge"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "timeUnixNano": now, "asDouble": v})
-        if metrics:
-            self._post("/v1/metrics", {"resourceMetrics": [{"resource": self.resource, "scopeMetrics": [
-                {"scope": {"name": "stance-battery"}, "metrics": list(metrics.values())}]}]})
+        with self.flush_lock:
+            with self.lock:
+                logs, self.logs = self.logs, []
+                counters, gauges = dict(self.counters), dict(self.gauges)
+            if logs:
+                self._post("/v1/logs", {"resourceLogs": [{"resource": self.resource, "scopeLogs": [
+                    {"scope": {"name": "stance-battery"}, "logRecords": logs}]}]})
+            now = str(time.time_ns())
+            metrics = {}
+            for (name, labels), v in counters.items():
+                m = metrics.setdefault(name, {"name": name, "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": []}})
+                m["sum"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "startTimeUnixNano": str(self.start_ns),
+                                               "timeUnixNano": now, "asDouble": v})
+            for (name, labels), v in gauges.items():
+                m = metrics.setdefault(name, {"name": name, "gauge": {"dataPoints": []}})
+                m["gauge"]["dataPoints"].append({"attributes": _attrs(dict(labels)), "timeUnixNano": now, "asDouble": v})
+            if metrics:
+                self._post("/v1/metrics", {"resourceMetrics": [{"resource": self.resource, "scopeMetrics": [
+                    {"scope": {"name": "stance-battery"}, "metrics": list(metrics.values())}]}]})
 
 
 # ----------------------------------------------------------------------------------------------- backends
@@ -480,7 +490,7 @@ def main(argv=None):
             print(f"{time.strftime('%H:%M:%S')} END {args.arm} {name} {round(time.time() - t0)}s", flush=True)
         status = "done"
     finally:
-        tm.stop.set()
+        tm.end_heartbeat()
         run.key_limits()
         tm.set("battery_run_active", run.labels, 0)
         tm.log("battery_run_end", {**run.base_record(), "status": status, "calls": run.calls, "seconds": round(time.time() - t_run)})
