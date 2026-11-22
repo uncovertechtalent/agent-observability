@@ -4,7 +4,6 @@ __pycache__/
 alertmanager/secrets/
 alertmanager/data/
 alert-issues/secrets/
-deploy-exporter/tokens/
 prometheus/secrets/
 pager/secrets/
 aws-cost-exporter/fixed-costs.local.json

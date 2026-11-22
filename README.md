@@ -57,7 +57,6 @@ docker compose up -d --build
 | Loki | 3100 | Claude Code events |
 | Tempo | 3200 | Claude Code traces |
 | ollama-exporter | 11435 | Metering proxy in front of Ollama |
-| ollama-exporter-macmini | 11435 (compose network only) | The Mac mini's Ollama: loaded models and the resident, from `/api/ps` |
 | deploy-exporter | 9201 | Website deploy runs to Loki, latest state as metrics |
 | aws-cost-exporter | 9202 (compose network only) | AWS spend and budget as metrics; reads the host's `~/.aws` read-only |
 | blackbox | 9115 (compose network only) | Pings, DNS queries and TCP connects against the LAN, for the `lan-*` scrape jobs |
@@ -119,10 +118,6 @@ Point LLM clients at `http://your-host:11435` instead of `:11434`. The proxy pas
 The `node` and `nvidia-gpu` scrape jobs expect [node_exporter](https://github.com/prometheus/node_exporter) on :9100 and [nvidia_gpu_exporter](https://github.com/utkuozdemir/nvidia_gpu_exporter) on :9835 on the Docker host. Delete the jobs if the host has neither.
 
 ## Dashboards
-
-**Mac mini LLM box.** Exporter, Ollama and resident up; memory pressure level, RAM used, uptime; the loaded models from `/api/ps`; LM Studio, OpenCode and ping probes; memory (used, wired, compressed, swap), pressure, CPU and GPU busy, temperature, power; free space per data volume and disk throughput. Internal.
-
-**Stance battery.** Runs, calls, cost and cut-off answers; the arms with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign requests, facts without pressure; cost per arm and the OpenRouter key against its limit; finish reasons, decode speed, latency, tokens. Internal.
 
 **Local LLM (Ollama).** SLO stats, a time-to-first-token heatmap, p50/p95 by model, decode tokens per second, model load time, token throughput, resident models with their GPU/CPU split, GPU utilisation next to host CPU. The pairing answers the usual question for a small GPU: whether a slow model is slow because it spilled to CPU.
 
@@ -203,53 +198,7 @@ It never carries a Discord ID, a channel, a label value, the summary or a URL.
 ]}
 ```
 
-**Deploys read from the outside.** The exporter polls the GitHub Actions API and the sites' public JSON instead of pushing from inside the workflows. The site repos stay unchanged, no ingest endpoint is exposed, and a run that dies before any step can report is still recorded, as is a run the gate blocks. History goes to Loki at the time each run finished, so a fresh exporter backfills the last week (Loki's limit for old samples) and Grafana draws it at once; replayed lines are exact duplicates and Loki drops them. Job logs expire on GitHub after a while; older runs keep their timings but lose the per-check verdict. Tokens are fine-grained and read-only: the exporter needs Actions (read) and Metadata (read), nothing more. One token covers one owner, so the exporter takes `GITHUB_TOKEN` for the user's repos and `GITHUB_TOKEN_<OWNER>` for another owner's, for example `GITHUB_TOKEN_UNCOVERTECHTALENT_GIT`; each new owner also needs its own line in `docker-compose.yml`, and `GITHUB_TOKEN_OWNER` names the owner `GITHUB_TOKEN` covers. At startup the exporter logs which site lacks a token. Better than both: `GITHUB_TOKEN_DIR` (`/tokens` in the compose file, mounted from `./deploy-exporter/tokens`) holds one file per owner, named after the owner in lower case, with a GitHub App installation token that a job outside the container renews every 30 minutes (`github-app/` in the `gitlab-home` repository). The file is read on every request, so a renewed token needs no restart, and it wins over the variables. The files must be readable by the container's user, nobody (65534).
-
-## The Mac mini LLM box
-
-A Mac mini (Apple Silicon) on the LAN serves models through Ollama, LM Studio and an OpenCode web UI, with one model kept loaded by a supervisor on the box. It is watched from this stack like the other hosts:
-
-- `macmini-node` and `macmini-macmon` scrape [node_exporter](https://github.com/prometheus/node_exporter) (:9100) and [macmon](https://github.com/vladkens/macmon) (:9102, memory pressure, temperatures, power, GPU) on the box. Their addresses go in `prometheus/targets/macmini-node.local.yml` and `macmini-macmon.local.yml` (examples committed).
-- `ollama-exporter-macmini` is a second instance of the metering proxy, pointed at the box's Ollama (`MACMINI_OLLAMA_URL`). Only its `/api/ps` poller is used: the loaded models, and `ollama_resident_loaded` for the model in `MACMINI_OLLAMA_RESIDENT`. It publishes no port, so no client goes through it. It starts only with `COMPOSE_PROFILES=macmini`, and its scrape target is the git-ignored `macmini-ollama.local.yml`, so a stack without the box has no target and raises nothing.
-- LM Studio and the OpenCode web UI are TCP probes in `lan-services.local.yml` named `macmini-lmstudio` and `macmini-opencode`, and the box is a ping target in `lan-icmp.local.yml` named `macmini` (the example files show the lines). A `LANHostDown` for a name starting `macmini` mutes the box's scrape, service and model alerts (`alertmanager.yml`), so an outage is one ticket.
-
-Alerts (`prometheus/rules/macmini.yml`, all tickets under `area:ai`, since the box is a sandbox): Ollama down, the resident not loaded for 15 minutes (muted while a stance battery run is active on the box), memory pressure at warning or worse for 10 minutes, a data volume below 10% free. A scrape that fails is `ScrapeTargetDown`, a dead service `LANServiceDown`, no ping `LANHostDown`. Decode speed per call comes from the battery's run records. Dashboard: "Mac mini LLM box" (uid `macmini`).
-
-The rules and Local LLM dashboards of the Ollama next to this stack read `job="ollama-exporter"`, so the box never mixes into them.
-
-## GitHub App token minter
-
-A job on the host (uncovertechtalent-git/gitlab-home, `github-app/`) mints one-hour GitHub App installation tokens every 30 minutes into `deploy-exporter/tokens/` and `alert-issues/secrets/`. Each run writes `github_app_mint.prom` into node_exporter's textfile folder: per target whether it was minted and the mtime of its token file (by `stat`; never read). `prometheus/rules/github_app.yml` tickets when the unit fails, when its timer is not active, when a token file is older than 60 minutes (expired), and when the textfile is missing. The alert-issues token pages at 50 minutes, before it expires, because tickets go nowhere without it. The unit rules read node_exporter's systemd collector (`--collector.systemd`; on by default in Ubuntu's `prometheus-node-exporter` package, off upstream) and the ages its textfile collector (`--collector.textfile.directory`); `GitHubAppMintUnitNotWatched` tickets when the unit state is missing. The old `AlertIssuesTokenExpiring` rule (a personal token's expiry date from GitHub's response header) is retired: installation tokens carry no such header, and the gauge kept the old token's date.
-
-## The stance battery
-
-`client/battery/battery.py` runs the house's stance battery against a model on any of four backends and records every call. The battery itself is three scripts kept outside this repository and byte-identical across runs: `probe.py` (stance probes and the keyword scorer), `baseline.py` (the same facts asked without pressure) and `refusal_check.py` (two benign requests). The driver checks their sha256 against the pinned values, imports them and replaces only their `call` function, so prompts, order, repetitions and scoring stay theirs.
-
-| Backend | Where | Precision recorded from | Cost |
-|---|---|---|---|
-| `ollama` | local `/api/chat` | `/api/show` (quantization level) | none |
-| `llamacpp` | local llama.cpp server | the model file name (`/props`), or `--precision` | none |
-| `openrouter` | hosted; `--provider` pinned, no fallback | the provider's endpoint entry | per call, from the answer |
-| `featherless` | hosted, OpenAI-compatible | `--precision` (the host states none per call) | per call, from the answer (`usage.cost`) |
-
-One line per call goes to `calls_<arm>.jsonl` in `--out`: arm, backend, provider that answered, model, precision, think setting, prompt, completion and reasoning tokens, reasoning and answer length, cost, latency, decode speed where the server gives it, finish reason. The scripts write their own results under `results/`, as before.
-
-With `--otlp http://your-host:4318` (or `BATTERY_OTLP_ENDPOINT`) the driver pushes to Alloy as OTLP/HTTP JSON, standard library only: each call and each scored answer (label and score, never the text) as a Loki event under `service_name="stance-battery"`, and counters and gauges to Prometheus (`battery_run_active`, `battery_calls_total`, `battery_tokens_total`, `battery_cost_usd_total`, `battery_decode_tokens_per_second`, and the OpenRouter key's `battery_key_limit_usd`, `battery_key_usage_usd`, `battery_key_remaining_usd`, read at the start, every 20 calls and the end). A failed push is reported once and the run goes on; the local files are the record.
-
-Keys are read from `~/.config/<service>/api-key`, refused unless mode 600, and used only in the Authorization header: never printed, logged, labelled or written. Run hosted arms from a machine that holds the key; local arms run on the model box itself (`--host` names it on every series, `macmini` for the Mac mini, which mutes `MacMiniResidentNotLoaded` while a run is active).
-
-```bash
-# local, on the box, thinking off, the three cells
-python3 battery.py --arm q38-heretic-off --backend ollama --model abl-q38-heretic-128k:latest \
-    --scripts ~/battery-scripts --out ~/runs/2026-11-23 --host macmini --otlp http://your-host:4318
-# hosted, provider pinned, lowest reasoning effort
-python3 battery.py --arm glm53-zai --backend openrouter --model z-ai/glm-5.3 --provider Z.AI --think low \
-    --scripts ~/battery-scripts --out ~/runs/2026-11-23 --otlp http://your-host:4318
-```
-
-`--cells smoke` makes one call first. `python3 client/battery/test_battery.py` tests the driver offline against fake backends and a fake collector, with stand-in scripts.
-
-Dashboard "Stance battery" (uid `battery`, internal): runs, calls, cost, cut-off answers; one row per arm with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign comply or refuse, facts held without pressure; cost per arm and the OpenRouter key's spend against its limit; finish reasons, decode speed, latency, tokens. The hand read of the answers stays manual. Alerts (`prometheus/rules/battery.yml`, tickets): a run active with no call for 30 minutes, and a hosted key under 10% of its limit. Decode speed is not alerted: it depends on the model and the backend.
+**Deploys read from the outside.** The exporter polls the GitHub Actions API and the sites' public JSON instead of pushing from inside the workflows. The site repos stay unchanged, no ingest endpoint is exposed, and a run that dies before any step can report is still recorded, as is a run the gate blocks. History goes to Loki at the time each run finished, so a fresh exporter backfills the last week (Loki's limit for old samples) and Grafana draws it at once; replayed lines are exact duplicates and Loki drops them. Job logs expire on GitHub after a while; older runs keep their timings but lose the per-check verdict. Tokens are fine-grained and read-only: the exporter needs Actions (read) and Metadata (read), nothing more. One token covers one owner, so the exporter takes `GITHUB_TOKEN` for the user's repos and `GITHUB_TOKEN_<OWNER>` for another owner's, for example `GITHUB_TOKEN_UNCOVERTECHTALENT_GIT`; each new owner also needs its own line in `docker-compose.yml`, and `GITHUB_TOKEN_OWNER` names the owner `GITHUB_TOKEN` covers. At startup the exporter logs which site lacks a token.
 
 ## Layout
 
@@ -263,8 +212,6 @@ pager/                           Discord pager: core.py (schedule, escalation, i
 pager/rotation.yml               who is on call, overrides, the escalation policy
 prometheus/rules/lan.yml         LAN health: scrape targets, hosts, DNS, reboots, RAID (also run on the NAS Prometheus)
 prometheus/rules/synology.yml       Synology NAS disks, volume and system status from SNMP (NAS Prometheus only)
-prometheus/rules/macmini.yml     the Mac mini LLM box: Ollama, the resident model, memory pressure, disk
-prometheus/rules/github_app.yml  the GitHub App token minter: unit failed, timer, token file age
 prometheus/targets/              file_sd lists for the lan-* probe jobs: *.example.yml committed, *.local.yml git-ignored
 blackbox/blackbox.yml            blackbox modules: icmp, dns_a, tcp_connect
 prometheus/tests/                promtool unit tests
@@ -280,8 +227,6 @@ aws-cost-exporter/               AWS spend from the cost and usage report in S3 
 client/claude-code.env           Claude Code telemetry settings
 client/searxng_exporter.py       SearXNG health, pushed as OTLP from the machine that runs it
 client/searxng-exporter.plist    launchd agent for it (macOS)
-client/battery/                  the stance battery driver: four backends, a record per call, OTLP to Alloy; offline tests
-prometheus/rules/battery.yml     the stance battery: stalled run, hosted key near its limit
 scripts/load.sh                  demo load
 scripts/check-alerting.sh        promtool, amtool and route checks; receiver unit tests
 ```
