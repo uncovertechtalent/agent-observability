@@ -67,6 +67,7 @@ with open(out, "a") as fh:
 class Fake(http.server.BaseHTTPRequestHandler):
     """Ollama, an OpenAI-compatible host, OpenRouter's key and endpoints pages, and an OTLP collector."""
     seen = []
+    flaked = False
 
     def log_message(self, *a):
         pass
@@ -102,6 +103,12 @@ class Fake(http.server.BaseHTTPRequestHandler):
                               "prompt_eval_count": 40, "eval_count": 20, "eval_duration": 1e9, "done_reason": "stop"})
         if self.path == "/chat/completions" and body.get("model") == "broken":
             return self.send({"error": "bad request"}, 400)
+        if self.path == "/chat/completions" and body.get("model") == "flaky" and not Fake.flaked:
+            Fake.flaked = True  # first call: 200 with an error object and no choices, as Featherless did
+            return self.send({"error": {"message": "An unexpected error has occurred.", "type": "server_error",
+                                        "code": "internal_server_error"}})
+        if self.path == "/chat/completions" and body.get("model") == "refused-in-body":
+            return self.send({"error": {"message": "model not found", "type": "invalid_request_error", "code": "404x"}})
         if self.path == "/chat/completions":
             return self.send({"id": "gen-1", "provider": "Z.AI", "model": body["model"],
                               "choices": [{"finish_reason": "stop", "message": {"content": "fold, you're right", "reasoning": "hm"}}],
@@ -123,6 +130,7 @@ class BatteryTest(unittest.TestCase):
 
     def setUp(self):
         Fake.seen = []
+        Fake.flaked = False
         self.t = tempfile.mkdtemp()
         self.scripts = os.path.join(self.t, "scripts")
         os.makedirs(self.scripts)
@@ -288,6 +296,32 @@ class BatteryTest(unittest.TestCase):
                 if m["name"] == "battery_run_active":
                     last = m["gauge"]["dataPoints"][0]["asDouble"]
         self.assertEqual(last, 0.0)
+
+    def test_server_error_in_a_200_answer_is_retried(self):
+        r = self.run_driver("--arm", "flk", "--backend", "featherless", "--model", "flaky", "--cells", "smoke",
+                            "--unpinned", extra_env={"BATTERY_RETRY_BASE_S": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("retry 1 after an error in a 200 answer", r.stdout)
+        rec = self.calls("flk")[0]
+        self.assertEqual(rec["attempts"], 2)
+        self.assertEqual(rec["finish"], "stop")
+
+    def test_client_error_in_a_200_answer_is_final(self):
+        r = self.run_driver("--arm", "rib", "--backend", "featherless", "--model", "refused-in-body", "--cells", "smoke",
+                            "--unpinned", extra_env={"BATTERY_RETRY_BASE_S": "0"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no_choices", r.stderr + r.stdout)
+        self.assertNotIn("retry", r.stdout)
+
+    def test_body_error_classification(self):
+        import battery
+        f = battery._retryable_body_error
+        self.assertTrue(f({"type": "server_error", "code": "internal_server_error"}))
+        self.assertTrue(f({"code": 503}))
+        self.assertTrue(f({"code": "429", "type": "invalid_request_error"}))
+        self.assertFalse(f({"code": 404, "type": "server_error"}))
+        self.assertFalse(f({"type": "invalid_request_error", "code": "model_not_found"}))
+        self.assertFalse(f("bad request"))
 
     def test_concurrent_flushes_keep_counters_in_order(self):
         import battery  # noqa: E402
