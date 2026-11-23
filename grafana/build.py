@@ -1719,7 +1719,7 @@ def site_traffic(public=False):
 # stats/cloudfront_to_loki.py, NAMED_BOTS). A class is a pattern on that name, never an identity.
 AUDIENCE_CLASSES = (
     # (legend, description, bot regex or None for humans, kinds counted)
-    ("1 Human", "Browsers: HTML pages served with status 200 to a User-Agent that names no bot.", None, "page"),
+    ("1 Human", "Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out.", None, "page"),
     ("2 LLM for a user", "An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, "
      "Perplexity-User and the like. Not training or index crawls.",
      "ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot", "page"),
@@ -1848,7 +1848,7 @@ def site_audience():
     mapq = loki_series("/map/ per hour: people, assistants, previews", [
         (f'sum(count_over_time({m} [$__interval]))', "Human views"),
         (f'sum(count_over_time({audience_selector(site, AUDIENCE_CLASSES[1][2], "page", "/map/")} [$__interval]))', "LLM for a user"),
-        (f'sum(count_over_time({{job="site-traffic", agent="bot"{site}}} | json | path=~"/map/.*" | bot=~"{AUDIENCE_CLASSES[2][2]}" [$__interval]))', "Link previews (page or image)"),
+        (f'sum(count_over_time({{job="site-traffic", agent="bot"{site}}} | json | kind=~"page|asset" | path=~"/map/.*" | bot=~"{AUDIENCE_CLASSES[2][2]}" [$__interval]))', "Link previews (page or image)"),
     ], draw="bars", stack=True, description="The window over time. Link previews of /map/ or its image mean someone pasted the link.")
     mapq["interval"] = "1h"
     p.append(L.place(mapq, 24, 8))
