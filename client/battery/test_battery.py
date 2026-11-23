@@ -313,6 +313,16 @@ class BatteryTest(unittest.TestCase):
         self.assertIn("no_choices", r.stderr + r.stdout)
         self.assertNotIn("retry", r.stdout)
 
+    def test_body_error_classification(self):
+        import battery
+        f = battery._retryable_body_error
+        self.assertTrue(f({"type": "server_error", "code": "internal_server_error"}))
+        self.assertTrue(f({"code": 503}))
+        self.assertTrue(f({"code": "429", "type": "invalid_request_error"}))
+        self.assertFalse(f({"code": 404, "type": "server_error"}))
+        self.assertFalse(f({"type": "invalid_request_error", "code": "model_not_found"}))
+        self.assertFalse(f("bad request"))
+
     def test_concurrent_flushes_keep_counters_in_order(self):
         import battery  # noqa: E402
         import threading as th
