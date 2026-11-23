@@ -122,6 +122,14 @@ def query_var(name, label, query, ds=PROM):
             "includeAll": True, "allValue": ".*", "multi": True, "current": {"text": "All", "value": "$__all"}, "refresh": 2}
 
 
+def loki_label_var(name, label, label_name, stream):
+    """Label values from Loki. Grafana's Loki variable takes a structured query (type 1 = label values);
+    a plain label_values(...) string lists only "All" in Grafana 12, and the default and URL value are dropped."""
+    v = query_var(name, label, f"label_values({stream},{label_name})", ds=LOKI)
+    v["query"] = {"type": 1, "label": label_name, "stream": stream, "refId": "LokiVariableQueryEditor-VariableQuery"}
+    return v
+
+
 def local_llm():
     L = Layout()
     m = 'gen_ai_request_model=~"$model"'
@@ -1694,7 +1702,7 @@ def site_traffic(public=False):
         p.append(L.place(ranked("Not found", f'topk(25, sum by (site, path) (count_over_time({every} | status="404" [$__range])))',
                                 {"site": "Site", "path": "Path"}, "Requests", "Paths that answered 404, bots included."), 12, 10))
 
-    variables = () if public else (query_var("site", "Site", 'label_values({job="site-traffic"}, site)', ds=LOKI),)
+    variables = () if public else (loki_label_var("site", "Site", "site", '{job="site-traffic"}'),)
     uid = "site-traffic-public" if public else "site-traffic"
     title = "Site traffic (public)" if public else "Site traffic"
     d = dashboard(uid, title,
@@ -1848,7 +1856,7 @@ def site_audience():
     d = dashboard("site-audience", "Site audience",
                   "Who reads the sites: people, assistants on a person's behalf, link previews, crawlers. Classes come from "
                   "the bot name in the access logs; no IP address is logged and nothing identifies a visitor. Internal.",
-                  p, (query_var("site", "Site", 'label_values({job="site-traffic"}, site)', ds=LOKI),),
+                  p, (loki_label_var("site", "Site", "site", '{job="site-traffic"}'),),
                   refresh="5m", time_from="now-30d")
     d["templating"]["list"][0]["current"] = {"text": ["machinebehavior.io"], "value": ["machinebehavior.io"]}
     d["tags"] += ["sites"]
