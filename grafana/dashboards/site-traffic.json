@@ -26,10 +26,12 @@
           "uid": "loki"
         },
         "query": {
-          "query": "label_values({job=\"site-traffic\"}, site)",
-          "refId": "site"
+          "type": 1,
+          "label": "site",
+          "stream": "{job=\"site-traffic\"}",
+          "refId": "LokiVariableQueryEditor-VariableQuery"
         },
-        "definition": "label_values({job=\"site-traffic\"}, site)",
+        "definition": "label_values({job=\"site-traffic\"},site)",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,

@@ -122,6 +122,14 @@ def query_var(name, label, query, ds=PROM):
             "includeAll": True, "allValue": ".*", "multi": True, "current": {"text": "All", "value": "$__all"}, "refresh": 2}
 
 
+def loki_label_var(name, label, label_name, stream):
+    """Label values from Loki. Grafana's Loki variable takes a structured query (type 1 = label values);
+    a plain label_values(...) string lists only "All" in Grafana 12, and the default and URL value are dropped."""
+    v = query_var(name, label, f"label_values({stream},{label_name})", ds=LOKI)
+    v["query"] = {"type": 1, "label": label_name, "stream": stream, "refId": "LokiVariableQueryEditor-VariableQuery"}
+    return v
+
+
 def local_llm():
     L = Layout()
     m = 'gen_ai_request_model=~"$model"'
@@ -1694,13 +1702,163 @@ def site_traffic(public=False):
         p.append(L.place(ranked("Not found", f'topk(25, sum by (site, path) (count_over_time({every} | status="404" [$__range])))',
                                 {"site": "Site", "path": "Path"}, "Requests", "Paths that answered 404, bots included."), 12, 10))
 
-    variables = () if public else (query_var("site", "Site", 'label_values({job="site-traffic"}, site)', ds=LOKI),)
+    variables = () if public else (loki_label_var("site", "Site", "site", '{job="site-traffic"}'),)
     uid = "site-traffic-public" if public else "site-traffic"
     title = "Site traffic (public)" if public else "Site traffic"
     d = dashboard(uid, title,
                   "Visits to the static sites on CloudFront, from the access logs. Counts only: the logs hold no IP "
                   "address, and no User-Agent string or full referrer URL reaches Loki.",
                   p, variables, refresh="5m", time_from="now-7d")
+    d["tags"] += ["sites"]
+    return d
+
+
+# ---------------------------------------------------------------- site audience
+
+# Visitor classes from the bot name the shipper derives from the User-Agent (site-infra
+# stats/cloudfront_to_loki.py, NAMED_BOTS). A class is a pattern on that name, never an identity.
+AUDIENCE_CLASSES = (
+    # (legend, description, bot regex or None for humans, kinds counted)
+    ("1 Human", "Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out.", None, "page"),
+    ("2 LLM for a user", "An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, "
+     "Perplexity-User and the like. Not training or index crawls.",
+     "ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot", "page"),
+    ("3 Link preview", "A platform fetching a link card because someone pasted a link: LinkedIn, Facebook, X, Slack, "
+     "Discord, Telegram, WhatsApp, Reddit, Mastodon. Pages and preview images; robots.txt left out.",
+     "facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon", "page|asset"),
+    ("4 AI crawler", "Training and AI index crawlers: GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Amazonbot, "
+     "meta-externalagent and the like.",
+     "GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|"
+     "Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot", "page"),
+    ("5 Search crawler", "Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like.",
+     "Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot", "page"),
+    ("6 Other bot", "Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers.",
+     "*OTHER*", "page"),
+)
+
+
+def audience_selector(site, cls_regex, kinds, path=""):
+    """LogQL for one visitor class. cls_regex None = humans; '*OTHER*' = bots in no named class."""
+    named = "|".join(c[2] for c in AUDIENCE_CLASSES if c[2] and c[2] != "*OTHER*")
+    p = f' | path="{path}"' if path else ""
+    if cls_regex is None:
+        return f'{{job="site-traffic", agent="human"{site}}} | json | kind=~"{kinds}"{p}'
+    if cls_regex == "*OTHER*":
+        return f'{{job="site-traffic", agent="bot"{site}}} | json | kind=~"{kinds}" | bot!~"{named}"{p}'
+    return f'{{job="site-traffic", agent="bot"{site}}} | json | kind=~"{kinds}" | bot=~"{cls_regex}" | path!="/robots.txt"{p}'
+
+
+def class_heatmap(title, site, description):
+    """One row per visitor class, one column per hour, colour = requests (exponential scale: bots outnumber people)."""
+    targets = [target(f'sum(count_over_time({audience_selector(site, rx, k)} [$__interval]))', legend, ds=LOKI, ref=chr(65 + i))
+               for i, (legend, _, rx, k) in enumerate(AUDIENCE_CLASSES)]
+    return {
+        # At least an hour per cell, and at most about 180 columns, so 30 days reads as 4-hour cells.
+        "type": "heatmap", "title": title, "description": description, "datasource": LOKI, "interval": "1h",
+        "maxDataPoints": 180, "targets": targets,
+        "options": {"calculate": False, "cellGap": 1, "rowsFrame": {"layout": "auto"},
+                    "yAxis": {"axisPlacement": "left", "reverse": True},
+                    "color": {"mode": "scheme", "scheme": "Inferno", "scale": "exponential", "exponent": 0.3,
+                              "fill": "dark-orange", "steps": 64},
+                    "cellValues": {"unit": "none", "decimals": 0},
+                    "filterValues": {"le": 1e-9}, "legend": {"show": True},
+                    "tooltip": {"mode": "single", "showColorScale": True}},
+    }
+
+
+# A page's section: its first two path segments (/inside/docs/), or the whole path when it is shorter.
+# Grouping by section keeps the series count low (66 sections against several hundred pages in 30 days
+# on machinebehavior.io, 2026-11-23); per-page counts for people hit Loki's series limit.
+SECTION = '| label_format section=`{{ regexReplaceAll "^(/[^/]+/[^/]+/).*$" .path "${1}" }}`'
+
+
+def class_matrix(title, site, description, classes=AUDIENCE_CLASSES[:5], top=30):
+    """Sections down the side, visitor classes across: which class reads what. One instant query per class, joined."""
+    targets, rename, overrides = [], {"section": "Section"}, []
+    for i, (legend, _, rx, k) in enumerate(classes):
+        ref = chr(65 + i)
+        targets.append(target(f'topk({top}, sum by (section) (count_over_time({audience_selector(site, rx, k)} {SECTION} [$__range])))',
+                              ds=LOKI, ref=ref, queryType="instant"))
+        name = legend.split(" ", 1)[1]
+        rename[f"Value #{ref}"] = name
+        overrides.append({"matcher": {"id": "byName", "options": name},
+                          "properties": [{"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}},
+                                         {"id": "color", "value": {"mode": "continuous-YlRd"}}]})
+    return {
+        "type": "table", "title": title, "description": description, "datasource": LOKI, "targets": targets,
+        "transformations": [
+            {"id": "joinByField", "options": {"byField": "section", "mode": "outer"}},
+            {"id": "organize", "options": {"excludeByName": {f"Time {i}": True for i in range(1, 9)} | {"Time": True},
+                                           "renameByName": rename}},
+            {"id": "sortBy", "options": {"sort": [{"field": "Human", "desc": True}]}},
+        ],
+        "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": ""}, "overrides": overrides},
+        "options": {"showHeader": True, "cellHeight": "sm"},
+    }
+
+
+def site_audience():
+    """Who reads the site: people, assistants on a person's behalf, link previews, crawlers. Internal.
+
+    Same CloudFront logs as Site traffic. Classes are patterns on the bot name the shipper derives from the
+    User-Agent: no IP address is logged, so a visitor cannot be followed across requests and nothing here
+    identifies anyone. "Human plus LLM" is read off the overlay and the matrix (the same page reached by both
+    in the same hours), a heuristic and labelled so. The owner's own visits are counted as human.
+    """
+    L = Layout()
+    site = ', site=~"$site"'
+    p = [L.row("Totals over the selected range")]
+    for (legend, desc, rx, k), short in zip(AUDIENCE_CLASSES[:4], ("People", "LLM for a user", "Link previews", "AI crawlers")):
+        p.append(L.place(traffic_total(short, f'sum(count_over_time({audience_selector(site, rx, k)} [$__range]))',
+                                       desc), 5, 4))
+    p.append(L.place(traffic_total("/map/ by people", f'sum(count_over_time({audience_selector(site, None, "page", "/map/")} [$__range]))',
+                                   "The window. Human page views of /map/ only: the most reliable sign that a person looked."), 4, 4))
+
+    p.append(L.row("Who reads, hour by hour"))
+    p.append(L.place(class_heatmap(
+        "Visitor classes per hour", site,
+        "Rows are visitor classes, columns are hours, colour is requests on an exponential scale (crawlers outnumber "
+        "people by far). A LinkedIn post shows as link previews, then humans, sometimes LLM fetches, in the hours after. "
+        + " ".join(f"{l}: {d}" for l, d, _, _ in AUDIENCE_CLASSES)), 24, 9))
+    overlay = loki_series("Humans and LLMs on the site, per hour (heuristic: same hours)", [
+        (f'sum(count_over_time({audience_selector(site, None, "page")} [$__interval]))', "Human page views"),
+        (f'sum(count_over_time({audience_selector(site, AUDIENCE_CLASSES[1][2], "page")} [$__interval]))', "LLM for a user"),
+        (f'sum(count_over_time({audience_selector(site, AUDIENCE_CLASSES[2][2], "page|asset")} [$__interval]))', "Link previews"),
+    ], draw="bars", description="Human page views against assistant fetches and link previews. When they cluster in the "
+       "same hours on the same pages (see the matrix), a person and their LLM are likely reading together. A heuristic: "
+       "no visitor is identified.")
+    overlay["interval"] = "1h"
+    overlay["fieldConfig"]["overrides"] = [{"matcher": {"id": "byRegexp", "options": "LLM.*|Link.*"},
+                                            "properties": [{"id": "custom.axisPlacement", "value": "right"}]}]
+    p.append(L.place(overlay, 24, 8))
+
+    p.append(L.row("What each class reads"))
+    p.append(L.place(class_matrix(
+        "Sections by visitor class", site,
+        "Top sections (first two path segments) per class over the selected range, joined: a section with numbers in both Human and LLM for a user "
+        "is read by people and by assistants on someone's behalf. Empty cell = not in that class's top 30."), 24, 12))
+
+    p.append(L.row("The window: /map/"))
+    m = audience_selector(site, None, "page", "/map/")
+    p.append(L.place(traffic_ranked("How people reached /map/", f'sum by (referrer) (count_over_time({m} [$__range]))',
+                                    {"referrer": "Referrer host"}, "Views",
+                                    "direct = no referrer (typed, a bookmark, an app link, the owner); internal = a link on the site."), 12, 8))
+    p.append(L.place(traffic_ranked("Where /map/ viewers are", f'sum by (country) (count_over_time({m} [$__range]))',
+                                    {"country": "Country"}, "Views", "ISO 3166 code CloudFront derives; no IP address is stored."), 12, 8))
+    mapq = loki_series("/map/ per hour: people, assistants, previews", [
+        (f'sum(count_over_time({m} [$__interval]))', "Human views"),
+        (f'sum(count_over_time({audience_selector(site, AUDIENCE_CLASSES[1][2], "page", "/map/")} [$__interval]))', "LLM for a user"),
+        (f'sum(count_over_time({{job="site-traffic", agent="bot"{site}}} | json | kind=~"page|asset" | path=~"/map/.*" | bot=~"{AUDIENCE_CLASSES[2][2]}" [$__interval]))', "Link previews (page or image)"),
+    ], draw="bars", stack=True, description="The window over time. Link previews of /map/ or its image mean someone pasted the link.")
+    mapq["interval"] = "1h"
+    p.append(L.place(mapq, 24, 8))
+
+    d = dashboard("site-audience", "Site audience",
+                  "Who reads the sites: people, assistants on a person's behalf, link previews, crawlers. Classes come from "
+                  "the bot name in the access logs; no IP address is logged and nothing identifies a visitor. Internal.",
+                  p, (loki_label_var("site", "Site", "site", '{job="site-traffic"}'),),
+                  refresh="5m", time_from="now-30d")
+    d["templating"]["list"][0]["current"] = {"text": ["machinebehavior.io"], "value": ["machinebehavior.io"]}
     d["tags"] += ["sites"]
     return d
 
@@ -2012,7 +2170,7 @@ def agent_tool_calls():
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for d in (local_llm(), local_llm_public(), macmini(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), chaintraveler_traffic_public(), agent_tool_calls(), battery()):
+    for d in (local_llm(), local_llm_public(), macmini(), host(), host_public(), claude_code(), claude_code_public(), site_deploys(), searxng(), searxng_public(), aws_spend(), finops(), finops_public(), site_traffic(), site_traffic(public=True), site_audience(), chaintraveler_traffic_public(), agent_tool_calls(), battery()):
         path = OUT / f"{d['uid']}.json"
         path.write_text(json.dumps(d, indent=2) + "\n")
         print(f"wrote {path} ({len(d['panels'])} panels)")

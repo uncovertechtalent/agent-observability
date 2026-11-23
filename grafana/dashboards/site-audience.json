@@ -1,0 +1,956 @@
+{
+  "uid": "site-audience",
+  "title": "Site audience",
+  "description": "Who reads the sites: people, assistants on a person's behalf, link previews, crawlers. Classes come from the bot name in the access logs; no IP address is logged and nothing identifies a visitor. Internal.",
+  "tags": [
+    "agent-observability",
+    "sites"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "label": "Site",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "query": {
+          "type": 1,
+          "label": "site",
+          "stream": "{job=\"site-traffic\"}",
+          "refId": "LokiVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values({job=\"site-traffic\"},site)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": [
+            "machinebehavior.io"
+          ],
+          "value": [
+            "machinebehavior.io"
+          ]
+        },
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Totals over the selected range",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "People",
+      "description": "Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "LLM for a user",
+      "description": "An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, Perplexity-User and the like. Not training or index crawls.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot\" | path!=\"/robots.txt\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 5,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Link previews",
+      "description": "A platform fetching a link card because someone pasted a link: LinkedIn, Facebook, X, Slack, Discord, Telegram, WhatsApp, Reddit, Mastodon. Pages and preview images; robots.txt left out.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page|asset\" | bot=~\"facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon\" | path!=\"/robots.txt\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "AI crawlers",
+      "description": "Training and AI index crawlers: GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Amazonbot, meta-externalagent and the like.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot\" | path!=\"/robots.txt\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 15,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "/map/ by people",
+      "description": "The window. Human page views of /map/ only: the most reliable sign that a person looked.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Who reads, hour by hour",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "id": 7
+    },
+    {
+      "type": "heatmap",
+      "title": "Visitor classes per hour",
+      "description": "Rows are visitor classes, columns are hours, colour is requests on an exponential scale (crawlers outnumber people by far). A LinkedIn post shows as link previews, then humans, sometimes LLM fetches, in the hours after. 1 Human: Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out. 2 LLM for a user: An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, Perplexity-User and the like. Not training or index crawls. 3 Link preview: A platform fetching a link card because someone pasted a link: LinkedIn, Facebook, X, Slack, Discord, Telegram, WhatsApp, Reddit, Mastodon. Pages and preview images; robots.txt left out. 4 AI crawler: Training and AI index crawlers: GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Amazonbot, meta-externalagent and the like. 5 Search crawler: Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like. 6 Other bot: Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "interval": "1h",
+      "maxDataPoints": 180,
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__interval]))",
+          "refId": "A",
+          "legendFormat": "1 Human"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "B",
+          "legendFormat": "2 LLM for a user"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page|asset\" | bot=~\"facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "C",
+          "legendFormat": "3 Link preview"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "D",
+          "legendFormat": "4 AI crawler"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "E",
+          "legendFormat": "5 Search crawler"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot!~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot|facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon|GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot|Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" [$__interval]))",
+          "refId": "F",
+          "legendFormat": "6 Other bot"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": true
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Inferno",
+          "scale": "exponential",
+          "exponent": 0.3,
+          "fill": "dark-orange",
+          "steps": 64
+        },
+        "cellValues": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "filterValues": {
+          "le": 1e-09
+        },
+        "legend": {
+          "show": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": true
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 9
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Humans and LLMs on the site, per hour (heuristic: same hours)",
+      "description": "Human page views against assistant fetches and link previews. When they cluster in the same hours on the same pages (see the matrix), a person and their LLM are likely reading together. A heuristic: no visitor is identified.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__interval]))",
+          "refId": "A",
+          "legendFormat": "Human page views"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "B",
+          "legendFormat": "LLM for a user"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page|asset\" | bot=~\"facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon\" | path!=\"/robots.txt\" [$__interval]))",
+          "refId": "C",
+          "legendFormat": "Link previews"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "LLM.*|Link.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1h",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 8
+      },
+      "id": 9
+    },
+    {
+      "type": "row",
+      "title": "What each class reads",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 1
+      },
+      "id": 10
+    },
+    {
+      "type": "table",
+      "title": "Sections by visitor class",
+      "description": "Top sections (first two path segments) per class over the selected range, joined: a section with numbers in both Human and LLM for a user is read by people and by assistants on someone's behalf. Empty cell = not in that class's top 30.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "refId": "A",
+          "queryType": "instant"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "refId": "B",
+          "queryType": "instant"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page|asset\" | bot=~\"facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "refId": "C",
+          "queryType": "instant"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "refId": "D",
+          "queryType": "instant"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "refId": "E",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "section",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time": true
+            },
+            "renameByName": {
+              "section": "Section",
+              "Value #A": "Human",
+              "Value #B": "LLM for a user",
+              "Value #C": "Link preview",
+              "Value #D": "AI crawler",
+              "Value #E": "Search crawler"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Human",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": ""
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Human"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-YlRd"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LLM for a user"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-YlRd"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Link preview"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-YlRd"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AI crawler"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-YlRd"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Search crawler"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-YlRd"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 12
+      },
+      "id": 11
+    },
+    {
+      "type": "row",
+      "title": "The window: /map/",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      },
+      "id": 12
+    },
+    {
+      "type": "table",
+      "title": "How people reached /map/",
+      "description": "direct = no referrer (typed, a bookmark, an app link, the owner); internal = a link on the site.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (referrer) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "referrer": 0,
+              "Value #A": 1
+            },
+            "renameByName": {
+              "referrer": "Referrer host",
+              "Value #A": "Views"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Views",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 12,
+        "h": 8
+      },
+      "id": 13
+    },
+    {
+      "type": "table",
+      "title": "Where /map/ viewers are",
+      "description": "ISO 3166 code CloudFront derives; no IP address is stored.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (country) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "country": 0,
+              "Value #A": 1
+            },
+            "renameByName": {
+              "country": "Country",
+              "Value #A": "Views"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Views",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 12,
+        "h": 8
+      },
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "/map/ per hour: people, assistants, previews",
+      "description": "The window over time. Link previews of /map/ or its image mean someone pasted the link.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__interval]))",
+          "refId": "A",
+          "legendFormat": "Human views"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot\" | path!=\"/robots.txt\" | path=\"/map/\" [$__interval]))",
+          "refId": "B",
+          "legendFormat": "LLM for a user"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page|asset\" | path=~\"/map/.*\" | bot=~\"facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon\" [$__interval]))",
+          "refId": "C",
+          "legendFormat": "Link previews (page or image)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1h",
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 24,
+        "h": 8
+      },
+      "id": 15
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "agent-observability"
+      ],
+      "asDropdown": true,
+      "title": "Dashboards"
+    }
+  ]
+}
