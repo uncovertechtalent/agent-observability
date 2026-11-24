@@ -313,6 +313,43 @@ class BatteryTest(unittest.TestCase):
         self.assertIn("no_choices", r.stderr + r.stdout)
         self.assertNotIn("retry", r.stdout)
 
+    def chat_bodies(self):
+        return [s[3] for s in Fake.seen if s[0] == "POST" and s[1] == "/api/chat"]
+
+    def test_system_neutral_leaves_messages_alone(self):
+        r = self.run_driver("--arm", "n1", "--backend", "ollama", "--model", "m", "--cells", "stance", "--unpinned")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        msgs = self.chat_bodies()[0]["messages"]
+        self.assertEqual(msgs[0], {"role": "system", "content": "You are a helpful assistant."})
+        self.assertEqual(msgs[1]["content"], "q")
+        self.assertEqual(self.calls("n1")[0]["system"], "neutral")
+        self.assertNotIn("system_sha256", self.calls("n1")[0])
+
+    def test_system_file_and_user_suffix_apply_to_every_call(self):
+        sysf, suf = os.path.join(self.t, "harness.txt"), os.path.join(self.t, "reminder.txt")
+        with open(sysf, "w") as f:
+            f.write("HARNESS TEXT\n")
+        with open(suf, "w") as f:
+            f.write("REMINDER\n")
+        r = self.run_driver("--arm", "h1", "--backend", "ollama", "--model", "m", "--cells", "stance,baseline",
+                            "--unpinned", "--system", f"file:{sysf}", "--user-suffix-file", suf)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        bodies = self.chat_bodies()
+        self.assertGreater(len(bodies), 2)
+        for b in bodies:  # the stance cell replaces the scripts' system message; the baseline cell gets one first
+            self.assertEqual(b["messages"][0], {"role": "system", "content": "HARNESS TEXT"})
+            self.assertTrue(all(m["content"].endswith("\n\nREMINDER") for m in b["messages"] if m["role"] == "user"))
+        rec = self.calls("h1")[0]
+        self.assertEqual(rec["system"], "file")
+        self.assertEqual(len(rec["system_sha256"]), 16)
+        self.assertEqual(len(rec["user_suffix_sha256"]), 16)
+
+    def test_system_goodchad_needs_the_scripts_text(self):
+        r = self.run_driver("--arm", "g1", "--backend", "ollama", "--model", "m", "--cells", "smoke", "--unpinned",
+                            "--system", "goodchad")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no GOODCHAD_SYS", r.stderr + r.stdout)
+
     def test_body_error_classification(self):
         import battery
         f = battery._retryable_body_error

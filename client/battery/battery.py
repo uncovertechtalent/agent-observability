@@ -23,6 +23,7 @@ header. They are never printed, logged, sent as telemetry or written to a file.
 
 usage: battery.py --arm ARM --backend BACKEND --model MODEL [--provider P] [--think off|on|low|medium|high]
                   [--cells all|smoke|stance,benign,baseline] [--scripts DIR] [--out DIR] [--host NAME]
+                  [--system neutral|goodchad|file:PATH] [--user-suffix-file PATH]
 env: BATTERY_N (stance repetitions, default 5), NUM_CTX (ollama), BATTERY_OTLP_ENDPOINT, BATTERY_URL
 """
 import argparse
@@ -331,6 +332,50 @@ class CallFailed(Exception):
 
 
 # ----------------------------------------------------------------------------------------------- run
+def message_shaper(args, probe):
+    """The --system and --user-suffix-file conditions, applied to every call without touching the pinned scripts.
+
+    neutral leaves the messages as the scripts built them. Any other system text replaces the content of the
+    system message, or is put first when the call has none (the baseline cell sends a bare user message), so
+    every cell of an arm runs under the same condition. The suffix is appended to every user message, the way a
+    per-prompt hook adds its reminder. The record names the condition and the sha256 prefix of each text.
+    """
+    if args.system == "neutral":
+        system = None
+    elif args.system == "goodchad":
+        system = getattr(probe, "GOODCHAD_SYS", None)
+        if not system:
+            raise SystemExit("--system goodchad: probe.py has no GOODCHAD_SYS")
+    else:
+        with open(os.path.expanduser(args.system[len("file:"):]), encoding="utf-8") as f:
+            system = f.read().strip()
+    suffix = None
+    if args.user_suffix_file:
+        with open(os.path.expanduser(args.user_suffix_file), encoding="utf-8") as f:
+            suffix = f.read().strip()
+    digest = lambda t: hashlib.sha256(t.encode()).hexdigest()[:16] if t else None
+    record = {"system": "file" if args.system.startswith("file:") else args.system}
+    if system:
+        record["system_sha256"] = digest(system)
+    if suffix:
+        record["user_suffix_sha256"] = digest(suffix)
+
+    def shape(messages):
+        out = [dict(m) for m in messages]
+        if system:
+            if out and out[0].get("role") == "system":
+                out[0]["content"] = system
+            else:
+                out.insert(0, {"role": "system", "content": system})
+        if suffix:
+            for m in out:
+                if m.get("role") == "user":
+                    m["content"] = f"{m['content']}\n\n{suffix}"
+        return out
+    shape.record = record
+    return shape
+
+
 class Run:
     def __init__(self, args, backend, telemetry):
         self.args, self.backend, self.tm = args, backend, telemetry
@@ -346,7 +391,7 @@ class Run:
     def base_record(self):
         return {"run_id": self.id, "arm": self.args.arm, "backend": self.args.backend, "model_requested": self.args.model,
                 "precision": self.backend.precision, "think": self.args.think, "host": self.args.host,
-                "pinned": not self.args.unpinned}
+                "pinned": not self.args.unpinned, **getattr(self, "system_record", {})}
 
     def call(self, messages, temp, max_tokens):
         try:
@@ -436,7 +481,13 @@ def parse_args(argv=None):
     ap.add_argument("--max-probe", type=int, help="token budget per probe call (default 600 off, 8192 thinking)")
     ap.add_argument("--max-base", type=int, help="token budget per baseline call (default 200 off, 4096 thinking)")
     ap.add_argument("--unpinned", action="store_true", help="allow scripts whose sha256 differs (tests only)")
+    ap.add_argument("--system", default="neutral",
+                    help="system prompt for every call: neutral (the scripts' own), goodchad (probe.py's GOODCHAD_SYS), "
+                         "or file:PATH (a harness text, e.g. what a plugin's SessionStart hooks inject)")
+    ap.add_argument("--user-suffix-file", help="text appended to every user message (e.g. a plugin's per-prompt reminder)")
     a = ap.parse_args(argv)
+    if a.system not in ("neutral", "goodchad") and not a.system.startswith("file:"):
+        ap.error("--system must be neutral, goodchad or file:PATH")
     if a.backend == "openrouter" and not a.provider:
         ap.error("--provider is required for openrouter: a hosted run must name its host")
     cells = CELLS[1:] if a.cells == "all" else tuple(c.strip() for c in a.cells.split(","))
@@ -456,9 +507,11 @@ def main(argv=None):
     if not args.otlp:
         print("telemetry off: no --otlp or BATTERY_OTLP_ENDPOINT; the local records are still written", file=sys.stderr)
     backend = Backend(args)
+    shape = message_shaper(args, probe)
     run = Run(args, backend, tm)
-    probe.call = lambda model, messages, temp: run.call(messages, temp, run.max_probe)
-    baseline.call = lambda model, prompt, temp: run.call([{"role": "user", "content": prompt}], temp, run.max_base)[0]
+    run.system_record = shape.record
+    probe.call = lambda model, messages, temp: run.call(shape(messages), temp, run.max_probe)
+    baseline.call = lambda model, prompt, temp: run.call(shape([{"role": "user", "content": prompt}]), temp, run.max_base)[0]
     res = os.path.join(args.out, "results")
     n = os.environ.get("BATTERY_N", "5")
 
@@ -479,7 +532,7 @@ def main(argv=None):
 
     def smoke():
         def go():
-            a, th, dt = run.call([{"role": "system", "content": probe.NEUTRAL_SYS}, {"role": "user", "content": SMOKE_PROMPT}], 0.3, run.max_probe)
+            a, th, dt = run.call(shape([{"role": "system", "content": probe.NEUTRAL_SYS}, {"role": "user", "content": SMOKE_PROMPT}]), 0.3, run.max_probe)
             print(f"answer {len(a)} chars, reasoning {len(th)} chars, {dt:.1f}s; starts: {a[:160]!r}", flush=True)
         return None, go
 
