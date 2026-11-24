@@ -640,7 +640,7 @@
     {
       "type": "table",
       "title": "Not found",
-      "description": "Paths that answered 404, bots included.",
+      "description": "Requests that answered 404, bots included, grouped by first folder (/inside/) or, for a file at the root, by its type (/*.php). Scanners try thousands of distinct paths a week, so per-path counts hit Loki's series limit.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -651,7 +651,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(25, sum by (site, path) (count_over_time({job=\"site-traffic\", site=~\"$site\"} | json | status=\"404\" [$__range])))",
+          "expr": "topk(25, sum by (site, group) (count_over_time({job=\"site-traffic\", site=~\"$site\"} | json | status=\"404\" | label_format group=`{{ regexReplaceAll \"^/[^/]*?(\\\\.[A-Za-z0-9]{1,6})?$\" (regexReplaceAll \"^(/[^/]+/).*$\" .path \"${1}\") \"/*${1}\" }}` [$__range])))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -665,12 +665,12 @@
             },
             "indexByName": {
               "site": 0,
-              "path": 1,
+              "group": 1,
               "Value #A": 2
             },
             "renameByName": {
               "site": "Site",
-              "path": "Path",
+              "group": "Section or file type",
               "Value #A": "Requests"
             }
           }

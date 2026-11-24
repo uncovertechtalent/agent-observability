@@ -1644,6 +1644,12 @@ def traffic_total(title, expr, description):
     return p
 
 
+# A 404's group: its first folder (/inside/), or "/*.ext" for a file at the root ("/*" without an extension).
+# Bounded where per-path counts are not: scanners request over a thousand distinct paths a week.
+NOT_FOUND_GROUP = ('| label_format group=`{{ regexReplaceAll "^/[^/]*?(\\\\.[A-Za-z0-9]{1,6})?$" '
+                   '(regexReplaceAll "^(/[^/]+/).*$" .path "${1}") "/*${1}" }}`')
+
+
 def site_traffic(public=False):
     """Site traffic from the CloudFront access logs of the static sites (repo site-infra).
 
@@ -1699,8 +1705,10 @@ def site_traffic(public=False):
         p.append(L.place(total("Not found", f'sum(count_over_time({every} | status="404" [$__range]))',
                                "Requests that answered 404, bots included. The paths are on the internal dashboard only: any request picks them."), 12, 10))
     else:
-        p.append(L.place(ranked("Not found", f'topk(25, sum by (site, path) (count_over_time({every} | status="404" [$__range])))',
-                                {"site": "Site", "path": "Path"}, "Requests", "Paths that answered 404, bots included."), 12, 10))
+        p.append(L.place(ranked("Not found", f'topk(25, sum by (site, group) (count_over_time({every} | status="404" {NOT_FOUND_GROUP} [$__range])))',
+                                {"site": "Site", "group": "Section or file type"}, "Requests",
+                                "Requests that answered 404, bots included, grouped by first folder (/inside/) or, for a file at the root, "
+                                "by its type (/*.php). Scanners try thousands of distinct paths a week, so per-path counts hit Loki's series limit."), 12, 10))
 
     variables = () if public else (loki_label_var("site", "Site", "site", '{job="site-traffic"}'),)
     uid = "site-traffic-public" if public else "site-traffic"
@@ -1732,14 +1740,17 @@ AUDIENCE_CLASSES = (
      "Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot", "page"),
     ("5 Search crawler", "Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like.",
      "Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot", "page"),
-    ("6 Other bot", "Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers.",
+    ("6 Other bot", "Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers. "
+     "Our own clients (parity check, /map/ crawler, deploy exporter) are left out.",
      "*OTHER*", "page"),
 )
+# Our own clients, as the site-traffic shipper names them (site-infra stats/cloudfront_to_loki.py, OWN_AGENTS).
+OWN_AGENTS = "site-infra-parity|site-map-crawler|deploy-exporter"
 
 
 def audience_selector(site, cls_regex, kinds, path=""):
     """LogQL for one visitor class. cls_regex None = humans; '*OTHER*' = bots in no named class."""
-    named = "|".join(c[2] for c in AUDIENCE_CLASSES if c[2] and c[2] != "*OTHER*")
+    named = "|".join([c[2] for c in AUDIENCE_CLASSES if c[2] and c[2] != "*OTHER*"] + [OWN_AGENTS])
     p = f' | path="{path}"' if path else ""
     if cls_regex is None:
         return f'{{job="site-traffic", agent="human"{site}}} | json | kind=~"{kinds}"{p}'
