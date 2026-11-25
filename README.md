@@ -122,7 +122,7 @@ The `node` and `nvidia-gpu` scrape jobs expect [node_exporter](https://github.co
 
 **Mac mini LLM box.** Exporter, Ollama and resident up; memory pressure level, RAM used, uptime; the loaded models from `/api/ps`; LM Studio, OpenCode and ping probes; memory (used, wired, compressed, swap), pressure, CPU and GPU busy, temperature, power; free space per data volume and disk throughput. Internal.
 
-**Stance battery.** Runs, calls, cost and cut-off answers; the arms with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign requests, facts without pressure; cost per arm and the OpenRouter key against its limit; finish reasons, decode speed, latency, tokens. Internal.
+**Stance battery.** Runs, calls, cost and cut-off answers; the arms with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign requests, facts without pressure; a live-run row (progress against the plan, held-out calls by question and turn, one line per call); cost per arm and the OpenRouter key against its limit; finish reasons, decode speed, latency, tokens. Internal.
 
 **Local LLM (Ollama).** SLO stats, a time-to-first-token heatmap, p50/p95 by model, decode tokens per second, model load time, token throughput, resident models with their GPU/CPU split, GPU utilisation next to host CPU. The pairing answers the usual question for a small GPU: whether a slow model is slow because it spilled to CPU.
 
@@ -227,14 +227,14 @@ A job on the host (uncovertechtalent-git/gitlab-home, `github-app/`) mints one-h
 
 | Backend | Where | Precision recorded from | Cost |
 |---|---|---|---|
-| `ollama` | local `/api/chat` | `/api/show` (quantization level) | none |
-| `llamacpp` | local llama.cpp server | the model file name (`/props`), or `--precision` | none |
+| `ollama` | local `/api/chat` | `/api/show` (quantization level) | none, or machine time with `--usd-per-hour` |
+| `llamacpp` | local llama.cpp server | the model file name (`/props`), or `--precision` | none, or machine time with `--usd-per-hour` |
 | `openrouter` | hosted; `--provider` pinned, no fallback | the provider's endpoint entry | per call, from the answer |
 | `featherless` | hosted, OpenAI-compatible | `--precision` (the host states none per call) | per call, from the answer (`usage.cost`) |
 
 One line per call goes to `calls_<arm>.jsonl` in `--out`: arm, backend, provider that answered, model, precision, think setting, prompt, completion and reasoning tokens, reasoning and answer length, cost, latency, decode speed where the server gives it, finish reason. The scripts write their own results under `results/`, as before.
 
-With `--otlp http://your-host:4318` (or `BATTERY_OTLP_ENDPOINT`) the driver pushes to Alloy as OTLP/HTTP JSON, standard library only: each call and each scored answer (label and score, never the text) as a Loki event under `service_name="stance-battery"`, and counters and gauges to Prometheus (`battery_run_active`, `battery_calls_total`, `battery_tokens_total`, `battery_cost_usd_total`, `battery_decode_tokens_per_second`, and the OpenRouter key's `battery_key_limit_usd`, `battery_key_usage_usd`, `battery_key_remaining_usd`, read at the start, every 20 calls and the end). A failed push is reported once and the run goes on; the local files are the record.
+With `--otlp http://your-host:4318` (or `BATTERY_OTLP_ENDPOINT`) the driver pushes to Alloy as OTLP/HTTP JSON, standard library only: each call and each scored answer (label and score, never the text) as a Loki event under `service_name="stance-battery"`, and counters and gauges to Prometheus (`battery_run_active`, `battery_calls_planned` when the run states a plan, `battery_calls_total`, `battery_tokens_total`, `battery_cost_usd_total`, `battery_decode_tokens_per_second`, and the OpenRouter key's `battery_key_limit_usd`, `battery_key_usage_usd`, `battery_key_remaining_usd`, read at the start, every 20 calls and the end). A failed push is reported once and the run goes on; the local files are the record.
 
 Keys are read from `~/.config/<service>/api-key`, refused unless mode 600, and used only in the Authorization header: never printed, logged, labelled or written. Run hosted arms from a machine that holds the key; local arms run on the model box itself (`--host` names it on every series, `macmini` for the Mac mini, which mutes `MacMiniResidentNotLoaded` while a run is active).
 
@@ -247,7 +247,7 @@ python3 battery.py --arm glm53-zai --backend openrouter --model z-ai/glm-5.3 --p
     --scripts ~/battery-scripts --out ~/runs/2026-11-23 --otlp http://your-host:4318
 ```
 
-`--cells heldout` runs a fourth pinned script, `heldout2.py`: eight held-out questions, two of which push back three times (`BATTERY_HELDOUT_N` tries each, default 3). Each call is recorded with its question and turn, so a persistence question can be followed push by push. This set has no keyword scorer; its answers are labelled by blind readers. On a rented machine, `--usd-per-hour 3.00` prices each call of a local backend by its latency (`cost_basis` `machine-time`); staging and idle time are not in that figure. `--planned-calls N` states how many calls a run will make, for the progress panel; the held-out cell alone knows its own size.
+`--cells heldout` runs a fourth pinned script, `heldout2.py`: eight held-out questions, two of which push back three times (`BATTERY_HELDOUT_N` tries each, default 3). Each call is recorded with its question and turn, so a persistence question can be followed push by push. This set has no keyword scorer; its answers are labelled by blind readers. On a rented machine, `--usd-per-hour 3.00` prices each call of a local backend by its latency (`cost_basis` `machine-time`); staging, idle time, and retries are not in that figure. `--planned-calls N` states how many calls a run will make, for the progress panel; the held-out cell alone knows its own size.
 
 ```bash
 BATTERY_URL=http://127.0.0.1:8099 python3 battery.py --arm q122-on-goodchad --backend llamacpp --model q122 --think on \

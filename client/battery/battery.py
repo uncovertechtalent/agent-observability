@@ -23,10 +23,13 @@ header. They are never printed, logged, sent as telemetry or written to a file.
 
 A fourth script, heldout2.py (the held-out questions, two of which push back three times), runs as the
 cell `heldout` when asked for. It is pinned the same way and only its `chat` function is replaced. Each of
-its calls is recorded with the question and the turn, so a run can be followed turn by turn.
+its calls is recorded with the question and the turn, so a run can be followed turn by turn. The driver's
+call uses temperature 0.3, the value heldout2.py's own chat sends, and the backend's thinking setting comes
+from --think, which the driver also passes to the script.
 
 For a rented machine, --usd-per-hour prices each call of a local backend by its latency (cost_basis
-machine-time), so the cost panels show the compute a run has used. Staging and idle time are not in it.
+machine-time), so the cost panels show the compute a run has used. Staging, idle time, and retries (the
+latency is that of the attempt that answered) are not in it.
 --planned-calls (or the held-out cell alone, which knows its own size) sets battery_calls_planned, the
 denominator of the progress panel.
 
@@ -504,7 +507,8 @@ def parse_args(argv=None):
     ap.add_argument("--provider", help="openrouter: the provider to pin (no fallback)")
     ap.add_argument("--think", default="off", choices=("off", "on", "low", "medium", "high"))
     ap.add_argument("--cells", default="all", help="all (stance,benign,baseline), smoke, or a comma list of stance,benign,baseline,heldout")
-    ap.add_argument("--scripts", default=os.environ.get("BATTERY_SCRIPTS", "."), help="folder with probe.py, baseline.py, refusal_check.py")
+    ap.add_argument("--scripts", default=os.environ.get("BATTERY_SCRIPTS", "."),
+                    help="folder with probe.py, baseline.py, refusal_check.py, and heldout2.py for the held-out cell")
     ap.add_argument("--out", default=".", help="folder for calls_<arm>.jsonl and results/")
     ap.add_argument("--host", default=os.environ.get("BATTERY_HOST") or socket.gethostname().split(".")[0].lower())
     ap.add_argument("--precision", help="state the precision when the backend does not (e.g. the GGUF quant)")
@@ -521,6 +525,8 @@ def parse_args(argv=None):
     a = ap.parse_args(argv)
     if a.system not in ("neutral", "goodchad") and not a.system.startswith("file:"):
         ap.error("--system must be neutral, goodchad or file:PATH")
+    if a.usd_per_hour is not None and (a.usd_per_hour <= 0 or BACKENDS[a.backend]["hosted"]):
+        ap.error("--usd-per-hour needs a rate above 0 and a local backend: a hosted call reports its own cost")
     if a.backend == "openrouter" and not a.provider:
         ap.error("--provider is required for openrouter: a hosted run must name its host")
     cells = DEFAULT_CELLS if a.cells == "all" else tuple(c.strip() for c in a.cells.split(","))
@@ -572,6 +578,8 @@ def main(argv=None):
         # heldout2.py builds the conversation and keeps the answers; the driver makes each call and records
         # which question and which turn it was. The question is known from the first user turn.
         first = {p["turns"][0]: p["id"] for p in held.PROBES}
+        if len(first) != len(held.PROBES):
+            raise SystemExit("heldout2.py: two questions share a first turn, so a call cannot be matched to its question")
 
         def chat(model, messages, think, num_predict):
             users = [m["content"] for m in messages if m.get("role") == "user"]

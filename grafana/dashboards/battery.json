@@ -163,7 +163,7 @@
     {
       "type": "stat",
       "title": "Cost",
-      "description": "Sum of the cost per call. A hosted call reports it in its answer (OpenRouter, Featherless). A local run started with --usd-per-hour prices each call by its latency at the machine's rate; staging and idle time are not in it.",
+      "description": "Sum of the cost per call. A hosted call reports it in its answer (OpenRouter, Featherless). A local run started with --usd-per-hour prices each call by its latency at the machine's rate; staging, idle time, and retries are not in it.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -382,7 +382,7 @@
     {
       "type": "gauge",
       "title": "Progress of the active runs",
-      "description": "Calls made over calls planned, for runs that are pushing now. A run states its plan with --planned-calls; the held-out cell alone knows its own size. Empty when no active run has a plan.",
+      "description": "Calls made over calls planned, for runs that are pushing now and stated a plan. A run states its plan with --planned-calls; the held-out cell alone knows its own size. Active runs without a plan are left out. Empty when no active run has a plan.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -393,7 +393,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(battery_calls_total and on (arm, host) (battery_run_active == 1)) / sum(battery_calls_planned and on (arm, host) (battery_run_active == 1))",
+          "expr": "sum(battery_calls_total and on (arm, host) (battery_run_active == 1) and on (arm, host) battery_calls_planned) / sum(battery_calls_planned and on (arm, host) (battery_run_active == 1))",
           "refId": "A"
         }
       ],
@@ -438,7 +438,7 @@
     {
       "type": "table",
       "title": "Held-out calls by question and turn",
-      "description": "The held-out set (heldout2.py): one call per turn. Turn 2 and later are pushbacks.",
+      "description": "The held-out set (heldout2.py): one call per turn, listed by arm, question and turn. Turn 2 and later are pushbacks.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -480,8 +480,13 @@
           "options": {
             "sort": [
               {
-                "field": "Calls",
-                "desc": true
+                "field": "Arm"
+              },
+              {
+                "field": "Question"
+              },
+              {
+                "field": "Turn"
               }
             ]
           }
@@ -861,7 +866,7 @@
     {
       "type": "table",
       "title": "Cost per arm",
-      "description": "",
+      "description": "Hosted arms: the cost the host billed per call. Arms with provider local: machine time, each call's latency at the --usd-per-hour rate (an estimate of compute used, not a bill).",
       "datasource": {
         "type": "loki",
         "uid": "loki"

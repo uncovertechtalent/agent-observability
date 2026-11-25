@@ -2017,6 +2017,11 @@ def battery():
         p["fieldConfig"]["defaults"].update(unit=unit, decimals=decimals)
         return p
 
+    def in_order(panel, *fields):
+        """Sort a ranked table by its label columns, first to last, where the count says nothing (every row is 1 per try)."""
+        panel["transformations"][-1] = {"id": "sortBy", "options": {"sort": [{"field": f} for f in fields]}}
+        return panel
+
     def counter(title, expr, unit="none", decimals=0, description=""):
         p = stat(title, expr, unit=unit, decimals=decimals, description=description, ds=LOKI)
         p["options"].update(colorMode="none", graphMode="none")
@@ -2031,7 +2036,7 @@ def battery():
         L.place(counter("Calls", count(BATTERY_CALLS), description="Model calls in the time range, all arms."), 4, 4),
         L.place(counter("Cost", usum(BATTERY_CALLS, "cost_usd"), USD, 4,
                         description="Sum of the cost per call. A hosted call reports it in its answer (OpenRouter, Featherless). A local run "
-                                    "started with --usd-per-hour prices each call by its latency at the machine's rate; staging and idle time are not in it."), 4, 4),
+                                    "started with --usd-per-hour prices each call by its latency at the machine's rate; staging, idle time, and retries are not in it."), 4, 4),
         L.place(counter("Cut off", count(BATTERY_CALLS + ' | finish=~"length|error"'),
                         description="Calls that hit the token budget (finish length) or failed (error). A cut-off answer scores as a hedge or fold."), 4, 4),
         L.place(counter("Generated tokens", usum(BATTERY_CALLS, "completion_tokens"), decimals=0), 4, 4),
@@ -2040,14 +2045,16 @@ def battery():
 
         L.row("Live run"),
         L.place(ratio_gauge("Progress of the active runs",
-                            "sum(battery_calls_total and on (arm, host) (battery_run_active == 1)) / "
+                            "sum(battery_calls_total and on (arm, host) (battery_run_active == 1) and on (arm, host) battery_calls_planned) / "
                             "sum(battery_calls_planned and on (arm, host) (battery_run_active == 1))",
-                            "Calls made over calls planned, for runs that are pushing now. A run states its plan with --planned-calls; "
-                            "the held-out cell alone knows its own size. Empty when no active run has a plan.",
+                            "Calls made over calls planned, for runs that are pushing now and stated a plan. A run states its plan with "
+                            "--planned-calls; the held-out cell alone knows its own size. Active runs without a plan are left out. "
+                            "Empty when no active run has a plan.",
                             steps=((None, "blue"), (1, "green")), max_=1), 6, 8),
-        L.place(ranked("Held-out calls by question and turn", count(BATTERY_CALLS + ' | cell="heldout"', ("arm", "probe", "turn")),
-                       {"arm": "Arm", "probe": "Question", "turn": "Turn"}, "Calls",
-                       description="The held-out set (heldout2.py): one call per turn. Turn 2 and later are pushbacks."), 9, 8),
+        L.place(in_order(ranked("Held-out calls by question and turn", count(BATTERY_CALLS + ' | cell="heldout"', ("arm", "probe", "turn")),
+                                {"arm": "Arm", "probe": "Question", "turn": "Turn"}, "Calls",
+                                description="The held-out set (heldout2.py): one call per turn, listed by arm, question and turn. "
+                                            "Turn 2 and later are pushbacks."), "Arm", "Question", "Turn"), 9, 8),
         L.place(logs("Calls, newest first",
                      BATTERY_CALLS + ' | line_format "{{.arm}} {{.cell}} {{.probe}} turn {{.turn}}: {{.completion_tokens}} tokens, {{.latency_s}} s, {{.finish}}"',
                      "One line per model call as it returns: arm, cell, question and turn where the cell records them, generated tokens, "
@@ -2066,7 +2073,9 @@ def battery():
 
         L.row("Cost and spend"),
         L.place(ranked("Cost per arm", usum(BATTERY_CALLS, "cost_usd", ("arm", "provider")),
-                       {"arm": "Arm", "provider": "Provider"}, "USD", USD, 4), 8, 8),
+                       {"arm": "Arm", "provider": "Provider"}, "USD", USD, 4,
+                       description="Hosted arms: the cost the host billed per call. Arms with provider local: machine time, "
+                                   "each call's latency at the --usd-per-hour rate (an estimate of compute used, not a bill)."), 8, 8),
         L.place(ratio_gauge("OpenRouter key: spend against limit",
                             "max(last_over_time(battery_key_usage_usd{backend=\"openrouter\"}[30d])) / max(last_over_time(battery_key_limit_usd{backend=\"openrouter\"}[30d]))",
                             "Usage over the key's credit limit, read from /api/v1/key at the start, every 20 calls and the end of each run."), 8, 8),

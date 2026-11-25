@@ -227,6 +227,24 @@ class BatteryTest(unittest.TestCase):
                    for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] if m["name"] == "battery_calls_planned"]
         self.assertEqual(planned[0], 8.0)
 
+    def test_heldout_failed_call_keeps_question_and_turn(self):
+        with open(os.path.join(self.scripts, "heldout2.py"), "w") as f:
+            f.write(HELDOUT)
+        r = self.run_driver("--arm", "heldfail", "--backend", "featherless", "--model", "broken", "--precision", "fp8",
+                            "--unpinned", "--cells", "heldout", extra_env={"BATTERY_HELDOUT_N": "1", "BATTERY_RETRY_BASE_S": "0"})
+        self.assertNotEqual(r.returncode, 0)
+        calls = self.calls("heldfail")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((calls[0]["finish"], calls[0]["probe"], calls[0]["turn"]), ("error", "H1_one_turn", 1))
+        ev = [e for e in self.log_events() if e["event.name"] == "battery_call"]
+        self.assertEqual((ev[0]["finish"], ev[0]["probe"], ev[0]["turn"]), ("error", "H1_one_turn", "1"))
+
+    def test_usd_per_hour_needs_a_local_backend_and_a_positive_rate(self):
+        for args in (("--backend", "featherless", "--usd-per-hour", "3"), ("--backend", "ollama", "--usd-per-hour", "0")):
+            r = self.run_driver("--arm", "badrate", "--model", "m", "--unpinned", *args)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("--usd-per-hour needs", r.stderr)
+
     def test_heldout_pin_refuses_a_changed_script(self):
         with open(os.path.join(self.scripts, "heldout2.py"), "w") as f:
             f.write(HELDOUT)
