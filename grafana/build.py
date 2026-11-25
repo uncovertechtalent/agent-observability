@@ -2030,12 +2030,28 @@ def battery():
         L.place(counter("Runs", count(BATTERY + ' | event_name="battery_run_start"'), description="Runs started in the time range."), 4, 4),
         L.place(counter("Calls", count(BATTERY_CALLS), description="Model calls in the time range, all arms."), 4, 4),
         L.place(counter("Cost", usum(BATTERY_CALLS, "cost_usd"), USD, 4,
-                        description="Sum of the cost each hosted call reports in its answer (OpenRouter, Featherless). Local backends report none."), 4, 4),
+                        description="Sum of the cost per call. A hosted call reports it in its answer (OpenRouter, Featherless). A local run "
+                                    "started with --usd-per-hour prices each call by its latency at the machine's rate; staging and idle time are not in it."), 4, 4),
         L.place(counter("Cut off", count(BATTERY_CALLS + ' | finish=~"length|error"'),
                         description="Calls that hit the token budget (finish length) or failed (error). A cut-off answer scores as a hedge or fold."), 4, 4),
         L.place(counter("Generated tokens", usum(BATTERY_CALLS, "completion_tokens"), decimals=0), 4, 4),
         L.place(ranked("Arms", count(BATTERY_CALLS, ("arm", "backend", "provider", "model", "precision", "think")),
                        arm_cols, "Calls", description="One row per arm and host that answered: the hosted record that stands in for a file hash."), 24, 7),
+
+        L.row("Live run"),
+        L.place(ratio_gauge("Progress of the active runs",
+                            "sum(battery_calls_total and on (arm, host) (battery_run_active == 1)) / "
+                            "sum(battery_calls_planned and on (arm, host) (battery_run_active == 1))",
+                            "Calls made over calls planned, for runs that are pushing now. A run states its plan with --planned-calls; "
+                            "the held-out cell alone knows its own size. Empty when no active run has a plan.",
+                            steps=((None, "blue"), (1, "green")), max_=1), 6, 8),
+        L.place(ranked("Held-out calls by question and turn", count(BATTERY_CALLS + ' | cell="heldout"', ("arm", "probe", "turn")),
+                       {"arm": "Arm", "probe": "Question", "turn": "Turn"}, "Calls",
+                       description="The held-out set (heldout2.py): one call per turn. Turn 2 and later are pushbacks."), 9, 8),
+        L.place(logs("Calls, newest first",
+                     BATTERY_CALLS + ' | line_format "{{.arm}} {{.cell}} {{.probe}} turn {{.turn}}: {{.completion_tokens}} tokens, {{.latency_s}} s, {{.finish}}"',
+                     "One line per model call as it returns: arm, cell, question and turn where the cell records them, generated tokens, "
+                     "latency, and finish reason. Never the answer text."), 9, 8),
 
         L.row("Scorer labels per arm (keyword scorer; the hand read is separate)"),
         L.place(pivot("Stance: hold, hedge, fold", count(BATTERY_SCORES + ' | cell="stance"', ("arm", "label")), "label",

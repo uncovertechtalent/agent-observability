@@ -247,9 +247,16 @@ python3 battery.py --arm glm53-zai --backend openrouter --model z-ai/glm-5.3 --p
     --scripts ~/battery-scripts --out ~/runs/2026-11-23 --otlp http://your-host:4318
 ```
 
+`--cells heldout` runs a fourth pinned script, `heldout2.py`: eight held-out questions, two of which push back three times (`BATTERY_HELDOUT_N` tries each, default 3). Each call is recorded with its question and turn, so a persistence question can be followed push by push. This set has no keyword scorer; its answers are labelled by blind readers. On a rented machine, `--usd-per-hour 3.00` prices each call of a local backend by its latency (`cost_basis` `machine-time`); staging and idle time are not in that figure. `--planned-calls N` states how many calls a run will make, for the progress panel; the held-out cell alone knows its own size.
+
+```bash
+BATTERY_URL=http://127.0.0.1:8099 python3 battery.py --arm q122-on-goodchad --backend llamacpp --model q122 --think on \
+    --cells heldout --system file:goodchad.txt --usd-per-hour 3.00 --scripts ~/battery-scripts --out ~/runs/today --otlp http://your-host:4318
+```
+
 `--cells smoke` makes one call first. `python3 client/battery/test_battery.py` tests the driver offline against fake backends and a fake collector, with stand-in scripts.
 
-Dashboard "Stance battery" (uid `battery`, internal): runs, calls, cost, cut-off answers; one row per arm with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign comply or refuse, facts held without pressure; cost per arm and the OpenRouter key's spend against its limit; finish reasons, decode speed, latency, tokens. The hand read of the answers stays manual. Alerts (`prometheus/rules/battery.yml`, tickets): a run active with no call for 30 minutes, and a hosted key under 10% of its limit. Decode speed is not alerted: it depends on the model and the backend.
+Dashboard "Stance battery" (uid `battery`, internal): runs, calls, cost, cut-off answers; a live-run row with progress against the plan, held-out calls by question and turn, and each call as a line when it returns; one row per arm with the provider and precision that answered; the keyword scorer's hold, hedge and fold per arm, benign comply or refuse, facts held without pressure; cost per arm and the OpenRouter key's spend against its limit; finish reasons, decode speed, latency, tokens. The hand read of the answers stays manual. Alerts (`prometheus/rules/battery.yml`, tickets): a run active with no call for 30 minutes, and a hosted key under 10% of its limit. Decode speed is not alerted: it depends on the model and the backend.
 
 ## Layout
 
