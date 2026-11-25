@@ -1727,7 +1727,9 @@ def site_traffic(public=False):
 # stats/cloudfront_to_loki.py, NAMED_BOTS). A class is a pattern on that name, never an identity.
 AUDIENCE_CLASSES = (
     # (legend, description, bot regex or None for humans, kinds counted)
-    ("1 Human", "Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out.", None, "page"),
+    ("1 Human", "Browsers that render the page: HTML pages served with a 2xx status to a User-Agent that names no bot, from a "
+     "client that also fetched a stylesheet, script or font around it (the shipper's rendered flag, from 2026-11-25). "
+     "Headless browsers still count.", None, "page"),
     ("2 LLM for a user", "An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, "
      "Perplexity-User and the like. Not training or index crawls.",
      "ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot", "page"),
@@ -1739,21 +1741,26 @@ AUDIENCE_CLASSES = (
      "GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|"
      "Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot", "page"),
     ("5 Search crawler", "Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like.",
-     "Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot", "page"),
+     "Googlebot|GoogleOther|Google-InspectionTool|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot", "page"),
     ("6 Other bot", "Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers. "
      "Our own clients (parity check, /map/ crawler, deploy exporter) are left out.",
      "*OTHER*", "page"),
+    ("7 HTML-only client", "A browser User-Agent that fetched the page but no stylesheet, script or font around it: a script "
+     "posing as a browser. Before 2026-11-25 these counted as Human.", "*HTMLONLY*", "page"),
 )
 # Our own clients, as the site-traffic shipper names them (site-infra stats/cloudfront_to_loki.py, OWN_AGENTS).
-OWN_AGENTS = "site-infra-parity|site-map-crawler|deploy-exporter"
+OWN_AGENTS = "site-infra-parity|site-map-crawler|deploy-exporter|name-count|house-portal"
 
 
 def audience_selector(site, cls_regex, kinds, path=""):
-    """LogQL for one visitor class. cls_regex None = humans; '*OTHER*' = bots in no named class."""
-    named = "|".join([c[2] for c in AUDIENCE_CLASSES if c[2] and c[2] != "*OTHER*"] + [OWN_AGENTS])
+    """LogQL for one visitor class. cls_regex None = humans (rendered pages); '*OTHER*' = bots in no named class;
+    '*HTMLONLY*' = browser User-Agents that fetched no stylesheet, script or font."""
+    named = "|".join([c[2] for c in AUDIENCE_CLASSES if c[2] and not c[2].startswith("*")] + [OWN_AGENTS])
     p = f' | path="{path}"' if path else ""
     if cls_regex is None:
-        return f'{{job="site-traffic", agent="human"{site}}} | json | kind=~"{kinds}"{p}'
+        return f'{{job="site-traffic", agent="human"{site}}} | json | kind=~"{kinds}" | rendered="true"{p}'
+    if cls_regex == "*HTMLONLY*":
+        return f'{{job="site-traffic", agent="human"{site}}} | json | kind=~"{kinds}" | rendered="false"{p}'
     if cls_regex == "*OTHER*":
         return f'{{job="site-traffic", agent="bot"{site}}} | json | kind=~"{kinds}" | bot!~"{named}"{p}'
     return f'{{job="site-traffic", agent="bot"{site}}} | json | kind=~"{kinds}" | bot=~"{cls_regex}" | path!="/robots.txt"{p}'
