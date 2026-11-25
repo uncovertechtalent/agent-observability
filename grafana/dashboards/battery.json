@@ -861,7 +861,7 @@
     {
       "type": "table",
       "title": "Cost per arm",
-      "description": "Hosted arms: the cost the host billed per call. Arms with provider local: machine time, each call's latency at the --usd-per-hour rate (an estimate of compute used, not a bill).",
+      "description": "Hosted arms: the cost the host billed per call. Arms with provider local: machine time, each call's latency at the --usd-per-hour rate. That is an estimate of compute used; the bill comes from the provider.",
       "datasource": {
         "type": "loki",
         "uid": "loki"

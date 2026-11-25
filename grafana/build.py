@@ -2081,7 +2081,7 @@ def battery():
         L.place(ranked("Cost per arm", usum(BATTERY_CALLS, "cost_usd", ("arm", "provider")),
                        {"arm": "Arm", "provider": "Provider"}, "USD", USD, 4,
                        description="Hosted arms: the cost the host billed per call. Arms with provider local: machine time, "
-                                   "each call's latency at the --usd-per-hour rate (an estimate of compute used, not a bill)."), 8, 8),
+                                   "each call's latency at the --usd-per-hour rate. That is an estimate of compute used; the bill comes from the provider."), 8, 8),
         L.place(ratio_gauge("OpenRouter key: spend against limit",
                             "max(last_over_time(battery_key_usage_usd{backend=\"openrouter\"}[30d])) / max(last_over_time(battery_key_limit_usd{backend=\"openrouter\"}[30d]))",
                             "Usage over the key's credit limit, read from /api/v1/key at the start, every 20 calls and the end of each run."), 8, 8),
