@@ -2017,9 +2017,12 @@ def battery():
         p["fieldConfig"]["defaults"].update(unit=unit, decimals=decimals)
         return p
 
-    def in_order(panel, *fields):
-        """Sort a ranked table by its label columns, first to last, where the count says nothing (every row is 1 per try)."""
-        panel["transformations"][-1] = {"id": "sortBy", "options": {"sort": [{"field": f} for f in fields]}}
+    def in_order(panel, key):
+        """Sort a ranked table by one key column built in the query, then hide it. Grafana's sortBy takes one field,
+        and here the count says nothing (every row is 1 per try)."""
+        organize = panel["transformations"][0]
+        organize["options"]["excludeByName"][key] = True
+        panel["transformations"] = [{"id": "sortBy", "options": {"sort": [{"field": key}]}}, organize]
         return panel
 
     def counter(title, expr, unit="none", decimals=0, description=""):
@@ -2051,12 +2054,15 @@ def battery():
                             "--planned-calls; the held-out cell alone knows its own size. Active runs without a plan are left out. "
                             "Empty when no active run has a plan.",
                             steps=((None, "blue"), (1, "green")), max_=1), 6, 8),
-        L.place(in_order(ranked("Held-out calls by question and turn", count(BATTERY_CALLS + ' | cell="heldout"', ("arm", "probe", "turn")),
+        L.place(in_order(ranked("Held-out calls by question and turn",
+                                count(BATTERY_CALLS + ' | cell="heldout" | label_format order="{{.arm}} {{.probe}} {{.turn}}"',
+                                      ("arm", "probe", "turn", "order")),
                                 {"arm": "Arm", "probe": "Question", "turn": "Turn"}, "Calls",
                                 description="The held-out set (heldout2.py): one call per turn, listed by arm, question and turn. "
-                                            "Turn 2 and later are pushbacks."), "Arm", "Question", "Turn"), 9, 8),
+                                            "Turn 2 and later are pushbacks."), "order"), 9, 8),
         L.place(logs("Calls, newest first",
-                     BATTERY_CALLS + ' | line_format "{{.arm}} {{.cell}} {{.probe}} turn {{.turn}}: {{.completion_tokens}} tokens, {{.latency_s}} s, {{.finish}}"',
+                     BATTERY_CALLS + ' | line_format "{{.arm}} {{.cell}}{{if .probe}} {{.probe}} turn {{.turn}}{{end}}: '
+                                     '{{if .completion_tokens}}{{.completion_tokens}} tokens, {{.latency_s}} s, {{end}}{{.finish}}"',
                      "One line per model call as it returns: arm, cell, question and turn where the cell records them, generated tokens, "
                      "latency, and finish reason. Never the answer text."), 9, 8),
 

@@ -449,17 +449,28 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (arm, probe, turn) (count_over_time({service_name=\"stance-battery\"} | event_name=\"battery_call\" | cell=\"heldout\" | keep arm, probe, turn [$__range]))",
+          "expr": "sum by (arm, probe, turn, order) (count_over_time({service_name=\"stance-battery\"} | event_name=\"battery_call\" | cell=\"heldout\" | label_format order=\"{{.arm}} {{.probe}} {{.turn}}\" | keep arm, probe, turn, order [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
       ],
       "transformations": [
         {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "order"
+              }
+            ]
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true
+              "Time": true,
+              "order": true
             },
             "indexByName": {
               "arm": 0,
@@ -473,22 +484,6 @@
               "turn": "Turn",
               "Value #A": "Calls"
             }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Arm"
-              },
-              {
-                "field": "Question"
-              },
-              {
-                "field": "Turn"
-              }
-            ]
           }
         }
       ],
@@ -525,7 +520,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"stance-battery\"} | event_name=\"battery_call\" | line_format \"{{.arm}} {{.cell}} {{.probe}} turn {{.turn}}: {{.completion_tokens}} tokens, {{.latency_s}} s, {{.finish}}\"",
+          "expr": "{service_name=\"stance-battery\"} | event_name=\"battery_call\" | line_format \"{{.arm}} {{.cell}}{{if .probe}} {{.probe}} turn {{.turn}}{{end}}: {{if .completion_tokens}}{{.completion_tokens}} tokens, {{.latency_s}} s, {{end}}{{.finish}}\"",
           "refId": "A"
         }
       ],

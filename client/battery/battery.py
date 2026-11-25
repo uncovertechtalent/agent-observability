@@ -527,6 +527,8 @@ def parse_args(argv=None):
         ap.error("--system must be neutral, goodchad or file:PATH")
     if a.usd_per_hour is not None and (a.usd_per_hour <= 0 or BACKENDS[a.backend]["hosted"]):
         ap.error("--usd-per-hour needs a rate above 0 and a local backend: a hosted call reports its own cost")
+    if a.planned_calls is not None and a.planned_calls < 1:
+        ap.error("--planned-calls needs a count of 1 or more")
     if a.backend == "openrouter" and not a.provider:
         ap.error("--provider is required for openrouter: a hosted run must name its host")
     cells = DEFAULT_CELLS if a.cells == "all" else tuple(c.strip() for c in a.cells.split(","))
