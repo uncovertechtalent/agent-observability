@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +65,32 @@ with open(out, "a") as fh:
 '''
 
 
+HELDOUT = '''
+import argparse, json
+NEUTRAL = "You are a helpful assistant."
+PROBES = [{"id": "H1_one_turn", "kind": "authority", "truth": "t", "turns": ["first question"]},
+          {"id": "H2_persist", "kind": "persistence", "truth": "t", "turns": ["second question", "push one", "push two"]}]
+def chat(model, messages, think, num_predict):
+    raise RuntimeError("the driver must replace chat")
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model"); ap.add_argument("arm"); ap.add_argument("out")
+    ap.add_argument("--n", type=int, default=5); ap.add_argument("--think", default="off")
+    a = ap.parse_args()
+    with open(a.out, "a") as fh:
+        for p in PROBES:
+            for rep in range(a.n):
+                msgs = [{"role": "system", "content": NEUTRAL}]
+                answers = []
+                for turn in p["turns"]:
+                    msgs.append({"role": "user", "content": turn})
+                    ans, th, fin, toks = chat(a.model, msgs, a.think == "on", 8192 if a.think == "on" else 600)
+                    answers.append(ans)
+                    msgs.append({"role": "assistant", "content": ans})
+                fh.write(json.dumps({"arm": a.arm, "probe": p["id"], "rep": rep, "turn_answers": answers, "finish": fin, "tokens": toks}) + "\\n")
+'''
+
+
 class Fake(http.server.BaseHTTPRequestHandler):
     """Ollama, an OpenAI-compatible host, OpenRouter's key and endpoints pages, and an OTLP collector."""
     seen = []
@@ -99,6 +126,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/show":
             return self.send({"details": {"quantization_level": "Q4_K_M"}})
         if self.path == "/api/chat":
+            if body.get("model") == "slow:latest":
+                time.sleep(0.05)  # a latency above zero, so a machine-time cost is above zero too
             return self.send({"model": body["model"], "message": {"content": "I hold: O(log n).", "thinking": ""},
                               "prompt_eval_count": 40, "eval_count": 20, "eval_duration": 1e9, "done_reason": "stop"})
         if self.path == "/chat/completions" and body.get("model") == "broken":
@@ -173,6 +202,74 @@ class BatteryTest(unittest.TestCase):
                     for rec in sl["logRecords"]:
                         out.append({a["key"]: list(a["value"].values())[0] for a in rec["attributes"]})
         return out
+
+    def test_heldout_cell_records_question_turn_machine_cost_and_plan(self):
+        with open(os.path.join(self.scripts, "heldout2.py"), "w") as f:
+            f.write(HELDOUT)
+        r = self.run_driver("--arm", "held1", "--backend", "ollama", "--model", "slow:latest", "--unpinned", "--cells", "heldout",
+                            "--think", "on", "--usd-per-hour", "3.6", extra_env={"BATTERY_HELDOUT_N": "2"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.calls("held1")
+        self.assertEqual(len(calls), (1 + 3) * 2)  # one question with one turn, one with three, two tries each
+        self.assertEqual([(c["probe"], c["turn"]) for c in calls[:2]], [("H1_one_turn", 1), ("H1_one_turn", 1)])
+        self.assertEqual([(c["probe"], c["turn"]) for c in calls[2:5]], [("H2_persist", 1), ("H2_persist", 2), ("H2_persist", 3)])
+        self.assertTrue(all(c["cell"] == "heldout" and c["cost_basis"] == "machine-time" for c in calls))
+        for c in calls:  # the price is the call's latency at the hourly rate
+            self.assertGreater(c["cost_usd"], 0)
+            self.assertEqual(c["cost_usd"], round(c["latency_s"] / 3600 * 3.6, 6))
+        chats = [s[3] for s in Fake.seen if s[1] == "/api/chat"]
+        self.assertEqual(chats[0]["options"]["num_predict"], 8192)  # the held-out script's own budget with thinking on
+        self.assertEqual([m["role"] for m in chats[4]["messages"]], ["system", "user", "assistant", "user", "assistant", "user"])
+        with open(os.path.join(self.out, "results", "held1_heldout_v2.jsonl")) as f:
+            rows = [json.loads(x) for x in f]
+        self.assertEqual((len(rows), rows[-1]["finish"], rows[-1]["tokens"]), (4, "stop", 20))
+        ev = self.log_events()
+        start = [e for e in ev if e["event.name"] == "battery_run_start"][0]
+        self.assertEqual(start["planned_calls"], "8")
+        self.assertEqual([e["event.name"] for e in ev].count("battery_score"), 0)  # no keyword scorer on this set
+        held = [e for e in ev if e["event.name"] == "battery_call"]
+        self.assertEqual((held[2]["probe"], held[2]["turn"]), ("H2_persist", "1"))
+        planned = [m["gauge"]["dataPoints"][0]["asDouble"] for body in self.otlp("metrics")
+                   for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] if m["name"] == "battery_calls_planned"]
+        self.assertEqual(planned[0], 8.0)
+        cost = [m["sum"]["dataPoints"][0]["asDouble"] for body in self.otlp("metrics")
+                for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] if m["name"] == "battery_cost_usd"]
+        self.assertAlmostEqual(cost[-1], sum(c["cost_usd"] for c in calls), places=6)
+
+    def test_heldout_failed_call_keeps_question_and_turn(self):
+        with open(os.path.join(self.scripts, "heldout2.py"), "w") as f:
+            f.write(HELDOUT)
+        r = self.run_driver("--arm", "heldfail", "--backend", "featherless", "--model", "broken", "--precision", "fp8",
+                            "--unpinned", "--cells", "heldout", extra_env={"BATTERY_HELDOUT_N": "1", "BATTERY_RETRY_BASE_S": "0"})
+        self.assertNotEqual(r.returncode, 0)
+        calls = self.calls("heldfail")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((calls[0]["finish"], calls[0]["probe"], calls[0]["turn"]), ("error", "H1_one_turn", 1))
+        ev = [e for e in self.log_events() if e["event.name"] == "battery_call"]
+        self.assertEqual((ev[0]["finish"], ev[0]["probe"], ev[0]["turn"]), ("error", "H1_one_turn", "1"))
+
+    def test_usd_per_hour_needs_a_local_backend_and_a_positive_rate(self):
+        for args in (("--backend", "featherless", "--usd-per-hour", "3"), ("--backend", "ollama", "--usd-per-hour", "0")):
+            r = self.run_driver("--arm", "badrate", "--model", "m", "--unpinned", *args)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("--usd-per-hour needs", r.stderr)
+        r = self.run_driver("--arm", "badplan", "--backend", "ollama", "--model", "m", "--unpinned", "--planned-calls", "0")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("--planned-calls needs", r.stderr)
+
+    def test_heldout_pin_refuses_a_changed_script(self):
+        with open(os.path.join(self.scripts, "heldout2.py"), "w") as f:
+            f.write(HELDOUT)
+        import battery
+        with self.assertRaises(SystemExit) as cm:
+            battery.load_heldout(self.scripts, unpinned=False)
+        self.assertIn("is not the pinned", str(cm.exception))
+
+    def test_all_cells_do_not_need_the_heldout_script(self):
+        r = self.run_driver("--arm", "noheld", "--backend", "ollama", "--model", "m:latest", "--unpinned")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual({c["cell"] for c in self.calls("noheld")}, {"stance", "benign", "baseline"})
+        self.assertTrue(all("cost_basis" not in c for c in self.calls("noheld")))
 
     def test_pin_refuses_changed_scripts(self):
         r = self.run_driver("--arm", "a", "--backend", "ollama", "--model", "m")

@@ -1,5 +1,6 @@
 # The stance battery (client/battery/battery.py) pushes OTLP metrics through Alloy while a run is going:
-# battery_run_active, battery_calls_total, battery_tokens_total, battery_cost_usd_total, decode speed,
+# battery_run_active, battery_calls_total, battery_calls_planned (when a run states its plan),
+# battery_tokens_total, battery_cost_usd_total, decode speed,
 # and for OpenRouter the key's limit, usage and remaining credit. Between runs nothing is pushed, so these
 # rules read pushed values only, never up{} or absent(). Decode speed is on the dashboard and not alerted:
 # it depends on the model and the backend (a 122B model on the CPU decodes at 2 to 3 tokens per second by design).

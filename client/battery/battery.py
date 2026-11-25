@@ -21,10 +21,24 @@ Prometheus. Telemetry never stops a run: a failed push is reported once and the 
 API keys are read from ~/.config/<service>/api-key (mode 600) and only ever placed in the Authorization
 header. They are never printed, logged, sent as telemetry or written to a file.
 
+A fourth script, heldout2.py (the held-out questions, two of which push back three times), runs as the
+cell `heldout` when asked for. It is pinned the same way and only its `chat` function is replaced. Each of
+its calls is recorded with the question and the turn, so a run can be followed turn by turn. The driver's
+call uses temperature 0.3, the value heldout2.py's own chat sends, and the backend's thinking setting comes
+from --think, which the driver also passes to the script.
+
+For a rented machine, --usd-per-hour prices each call of a local backend by its latency (cost_basis
+machine-time), so the cost panels show the compute a run has used. Staging, idle time, and retries (the
+latency is that of the attempt that answered) are not in it.
+--planned-calls (or the held-out cell alone, which knows its own size) sets battery_calls_planned, the
+denominator of the progress panel.
+
 usage: battery.py --arm ARM --backend BACKEND --model MODEL [--provider P] [--think off|on|low|medium|high]
-                  [--cells all|smoke|stance,benign,baseline] [--scripts DIR] [--out DIR] [--host NAME]
+                  [--cells all|smoke|stance,benign,baseline,heldout] [--scripts DIR] [--out DIR] [--host NAME]
                   [--system neutral|goodchad|file:PATH] [--user-suffix-file PATH]
-env: BATTERY_N (stance repetitions, default 5), NUM_CTX (ollama), BATTERY_OTLP_ENDPOINT, BATTERY_URL
+                  [--usd-per-hour USD] [--planned-calls N]
+env: BATTERY_N (stance repetitions, default 5), BATTERY_HELDOUT_N (held-out repetitions, default 3),
+     NUM_CTX (ollama), BATTERY_OTLP_ENDPOINT, BATTERY_URL
 """
 import argparse
 import hashlib
@@ -53,7 +67,9 @@ BACKENDS = {
 }
 # Ollama's effective defaults with the repeat penalty off, as in every run since 2026-11-22.
 SAMPLER = {"top_k": 40, "top_p": 0.9, "min_p": 0.0}
-CELLS = ("smoke", "stance", "benign", "baseline")
+PINNED_HELDOUT = {"heldout2.py": "0b7ca76b4e9d06afb486cdc04e8134cf2654a5a96faff5a5042928561132d4fc"}
+CELLS = ("smoke", "stance", "benign", "baseline", "heldout")
+DEFAULT_CELLS = ("stance", "benign", "baseline")  # --cells all; the held-out cell runs only when named
 RETRY_CODES = (429, 500, 502, 503, 504)
 RETRY_BASE_S = float(os.environ.get("BATTERY_RETRY_BASE_S", "10"))  # wait before retry n is n times this
 
@@ -387,24 +403,30 @@ class Run:
         self.labels = {"arm": args.arm, "backend": args.backend, "model": args.model, "host": args.host}
         self.max_probe = args.max_probe or (600 if args.think == "off" else 8192)
         self.max_base = args.max_base or (200 if args.think == "off" else 4096)
+        self.last = {}
 
     def base_record(self):
         return {"run_id": self.id, "arm": self.args.arm, "backend": self.args.backend, "model_requested": self.args.model,
                 "precision": self.backend.precision, "think": self.args.think, "host": self.args.host,
                 "pinned": not self.args.unpinned, **getattr(self, "system_record", {})}
 
-    def call(self, messages, temp, max_tokens):
+    def call(self, messages, temp, max_tokens, extra=None):
+        """One model call. `extra` adds fields a cell knows about the call (the question and the turn)."""
         try:
             answer, reasoning, rec = self.backend.chat(messages, temp, max_tokens)
         except CallFailed as e:
-            rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, "finish": "error", "error": e.kind}
+            rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, "finish": "error", "error": e.kind,
+                   **(extra or {})}
             self.side.write(json.dumps(rec) + "\n")
             self.side.flush()
             self.tm.log("battery_call", {k: v for k, v in rec.items() if k != "ts"})
             self.tm.add("battery_calls", {**self.labels, "cell": self.cell, "finish": "error"})
             self.tm.flush()
             raise SystemExit(f"{e.kind}: {e}")
-        rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, **rec}
+        rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, **rec, **(extra or {})}
+        if self.args.usd_per_hour and not self.backend.hosted and rec.get("cost_usd") is None:
+            rec.update(cost_usd=round(rec["latency_s"] / 3600 * self.args.usd_per_hour, 6), cost_basis="machine-time")
+        self.last = rec
         self.side.write(json.dumps(rec) + "\n")
         self.side.flush()
         self.calls += 1
@@ -465,6 +487,18 @@ def load_scripts(scripts, unpinned):
     return probe, baseline
 
 
+def load_heldout(scripts, unpinned):
+    """heldout2.py, pinned like the other scripts, loaded only for the held-out cell."""
+    for name, want in PINNED_HELDOUT.items():
+        got = sha256(os.path.join(scripts, name))
+        if got != want:
+            if not unpinned:
+                raise SystemExit(f"{name} sha256 {got[:8]} is not the pinned {want[:8]}; the held-out set must run unchanged")
+            print(f"UNPINNED: {name} sha256 {got[:8]} (pinned {want[:8]}); records carry pinned=false", file=sys.stderr)
+    import heldout2  # noqa: E402
+    return heldout2
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--arm", required=True, help="name of this arm; becomes the file names and the arm label")
@@ -472,8 +506,9 @@ def parse_args(argv=None):
     ap.add_argument("--model", required=True, help="model name as the backend knows it")
     ap.add_argument("--provider", help="openrouter: the provider to pin (no fallback)")
     ap.add_argument("--think", default="off", choices=("off", "on", "low", "medium", "high"))
-    ap.add_argument("--cells", default="all", help="all, smoke, or a comma list of stance,benign,baseline")
-    ap.add_argument("--scripts", default=os.environ.get("BATTERY_SCRIPTS", "."), help="folder with probe.py, baseline.py, refusal_check.py")
+    ap.add_argument("--cells", default="all", help="all (stance,benign,baseline), smoke, or a comma list of stance,benign,baseline,heldout")
+    ap.add_argument("--scripts", default=os.environ.get("BATTERY_SCRIPTS", "."),
+                    help="folder with probe.py, baseline.py, refusal_check.py, and heldout2.py for the held-out cell")
     ap.add_argument("--out", default=".", help="folder for calls_<arm>.jsonl and results/")
     ap.add_argument("--host", default=os.environ.get("BATTERY_HOST") or socket.gethostname().split(".")[0].lower())
     ap.add_argument("--precision", help="state the precision when the backend does not (e.g. the GGUF quant)")
@@ -485,12 +520,18 @@ def parse_args(argv=None):
                     help="system prompt for every call: neutral (the scripts' own), goodchad (probe.py's GOODCHAD_SYS), "
                          "or file:PATH (a harness text, e.g. what a plugin's SessionStart hooks inject)")
     ap.add_argument("--user-suffix-file", help="text appended to every user message (e.g. a plugin's per-prompt reminder)")
+    ap.add_argument("--usd-per-hour", type=float, help="local backends: price each call by its latency at this machine rate")
+    ap.add_argument("--planned-calls", type=int, help="calls this run is expected to make, for the progress panel")
     a = ap.parse_args(argv)
     if a.system not in ("neutral", "goodchad") and not a.system.startswith("file:"):
         ap.error("--system must be neutral, goodchad or file:PATH")
+    if a.usd_per_hour is not None and (a.usd_per_hour <= 0 or BACKENDS[a.backend]["hosted"]):
+        ap.error("--usd-per-hour needs a rate above 0 and a local backend: a hosted call reports its own cost")
+    if a.planned_calls is not None and a.planned_calls < 1:
+        ap.error("--planned-calls needs a count of 1 or more")
     if a.backend == "openrouter" and not a.provider:
         ap.error("--provider is required for openrouter: a hosted run must name its host")
-    cells = CELLS[1:] if a.cells == "all" else tuple(c.strip() for c in a.cells.split(","))
+    cells = DEFAULT_CELLS if a.cells == "all" else tuple(c.strip() for c in a.cells.split(","))
     bad = [c for c in cells if c not in CELLS]
     if bad:
         ap.error(f"unknown cells: {bad}")
@@ -514,6 +555,11 @@ def main(argv=None):
     baseline.call = lambda model, prompt, temp: run.call(shape([{"role": "user", "content": prompt}]), temp, run.max_base)[0]
     res = os.path.join(args.out, "results")
     n = os.environ.get("BATTERY_N", "5")
+    hn = os.environ.get("BATTERY_HELDOUT_N", "3")
+    held = load_heldout(scripts, args.unpinned) if "heldout" in args.cell_list else None
+    planned = args.planned_calls
+    if planned is None and args.cell_list == ("heldout",):
+        planned = sum(len(p["turns"]) for p in held.PROBES) * int(hn)
 
     def stance():
         out = f"{res}/{args.arm}_neutral_B.jsonl"
@@ -530,6 +576,23 @@ def main(argv=None):
         sys.argv = ["baseline.py", "--model", args.arm, "--n", "3", "--out", out]
         return out, baseline.main
 
+    def heldout():
+        # heldout2.py builds the conversation and keeps the answers; the driver makes each call and records
+        # which question and which turn it was. The question is known from the first user turn.
+        first = {p["turns"][0]: p["id"] for p in held.PROBES}
+        if len(first) != len(held.PROBES):
+            raise SystemExit("heldout2.py: two questions share a first turn, so a call cannot be matched to its question")
+
+        def chat(model, messages, think, num_predict):
+            users = [m["content"] for m in messages if m.get("role") == "user"]
+            extra = {"probe": first.get(users[0]) if users else None, "turn": len(users)}
+            answer, reasoning, _ = run.call(shape(messages), 0.3, args.max_probe or num_predict, extra)
+            return answer, reasoning, run.last.get("finish"), run.last.get("completion_tokens")
+        held.chat = chat
+        out = f"{res}/{args.arm}_heldout_v2.jsonl"
+        sys.argv = ["heldout2.py", args.arm, args.arm, out, "--n", hn, "--think", "off" if args.think == "off" else "on"]
+        return None, held.main  # no keyword scorer on this set: the answers are labelled by blind readers
+
     def smoke():
         def go():
             a, th, dt = run.call(shape([{"role": "system", "content": probe.NEUTRAL_SYS}, {"role": "user", "content": SMOKE_PROMPT}]), 0.3, run.max_probe)
@@ -537,11 +600,13 @@ def main(argv=None):
         return None, go
 
     start = {**run.base_record(), "cells": ",".join(args.cell_list), "provider_pinned": args.provider,
-             "pinned": not args.unpinned, "battery_n": int(n)}
+             "pinned": not args.unpinned, "battery_n": int(n), **({"planned_calls": planned} if planned else {})}
     print(f"{time.strftime('%H:%M:%S')} RUN {run.id} arm {args.arm} backend {args.backend} model {args.model} "
           f"precision {backend.precision} think {args.think}", flush=True)
     tm.log("battery_run_start", start)
     tm.set("battery_run_active", run.labels, 1)
+    if planned:
+        tm.set("battery_calls_planned", run.labels, planned)
     for c in args.cell_list:
         tm.add("battery_calls", {**run.labels, "cell": c, "finish": "stop"}, 0)  # a zero first, so increase() sees the first call
     run.key_limits()
@@ -549,7 +614,7 @@ def main(argv=None):
     tm.heartbeat()
     t_run, status = time.time(), "error"
     try:
-        for name, fn in (("smoke", smoke), ("stance", stance), ("benign", benign), ("baseline", base)):
+        for name, fn in (("smoke", smoke), ("stance", stance), ("benign", benign), ("baseline", base), ("heldout", heldout)):
             if name not in args.cell_list:
                 continue
             run.cell = name
