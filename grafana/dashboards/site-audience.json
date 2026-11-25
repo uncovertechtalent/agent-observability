@@ -64,7 +64,7 @@
     {
       "type": "stat",
       "title": "People",
-      "description": "Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out.",
+      "description": "Browsers that render the page: HTML pages served with a 2xx status to a User-Agent that names no bot, from a client that also fetched a stylesheet, script or font around it (the shipper's rendered flag, from 2026-11-25). Headless browsers still count.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -75,7 +75,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__range]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -247,7 +247,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" | path=\"/map/\" [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -292,7 +292,7 @@
     {
       "type": "heatmap",
       "title": "Visitor classes per hour",
-      "description": "Rows are visitor classes, columns are hours, colour is requests on an exponential scale (crawlers outnumber people by far). A LinkedIn post shows as link previews, then humans, sometimes LLM fetches, in the hours after. 1 Human: Browsers: HTML pages served with a 2xx status to a User-Agent that names no bot. Redirects and errors left out. 2 LLM for a user: An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, Perplexity-User and the like. Not training or index crawls. 3 Link preview: A platform fetching a link card because someone pasted a link: LinkedIn, Facebook, X, Slack, Discord, Telegram, WhatsApp, Reddit, Mastodon. Pages and preview images; robots.txt left out. 4 AI crawler: Training and AI index crawlers: GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Amazonbot, meta-externalagent and the like. 5 Search crawler: Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like. 6 Other bot: Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers. Our own clients (parity check, /map/ crawler, deploy exporter) are left out.",
+      "description": "Rows are visitor classes, columns are hours, colour is requests on an exponential scale (crawlers outnumber people by far). A LinkedIn post shows as link previews, then humans, sometimes LLM fetches, in the hours after. 1 Human: Browsers that render the page: HTML pages served with a 2xx status to a User-Agent that names no bot, from a client that also fetched a stylesheet, script or font around it (the shipper's rendered flag, from 2026-11-25). Headless browsers still count. 2 LLM for a user: An assistant opening a page because someone asked it something: ChatGPT-User, Claude-User, Perplexity-User and the like. Not training or index crawls. 3 Link preview: A platform fetching a link card because someone pasted a link: LinkedIn, Facebook, X, Slack, Discord, Telegram, WhatsApp, Reddit, Mastodon. Pages and preview images; robots.txt left out. 4 AI crawler: Training and AI index crawlers: GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Amazonbot, meta-externalagent and the like. 5 Search crawler: Search engine crawlers: Googlebot, bingbot, Applebot, YandexBot and the like. 6 Other bot: Everything else that announces itself as a bot or script: SEO tools, monitors, generic crawlers. Our own clients (parity check, /map/ crawler, deploy exporter) are left out. 7 HTML-only client: A browser User-Agent that fetched the page but no stylesheet, script or font around it: a script posing as a browser. Before 2026-11-25 these counted as Human.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -305,7 +305,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" [$__interval]))",
           "refId": "A",
           "legendFormat": "1 Human"
         },
@@ -341,7 +341,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|GoogleOther|Google-InspectionTool|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" [$__interval]))",
           "refId": "E",
           "legendFormat": "5 Search crawler"
         },
@@ -350,9 +350,18 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot!~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot|facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon|GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot|Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot|site-infra-parity|site-map-crawler|deploy-exporter\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot!~\"ChatGPT-User|Claude-User|Perplexity-User|meta-externalfetcher|MistralAI-User|DuckAssistBot|facebookexternalhit|LinkedInBot|Twitterbot|Slackbot|Discordbot|TelegramBot|WhatsApp|redditbot|Mastodon|GPTBot|OAI-SearchBot|ClaudeBot|Claude-SearchBot|anthropic-ai|PerplexityBot|Google-Extended|Applebot-Extended|Bytespider|CCBot|Amazonbot|meta-externalagent|cohere-ai|YouBot|Diffbot|Googlebot|GoogleOther|Google-InspectionTool|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot|site-infra-parity|site-map-crawler|deploy-exporter|name-count|house-portal\" [$__interval]))",
           "refId": "F",
           "legendFormat": "6 Other bot"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"false\" [$__interval]))",
+          "refId": "G",
+          "legendFormat": "7 HTML-only client"
         }
       ],
       "options": {
@@ -410,7 +419,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" [$__interval]))",
           "refId": "A",
           "legendFormat": "Human page views"
         },
@@ -510,7 +519,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
           "refId": "A",
           "queryType": "instant"
         },
@@ -546,7 +555,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
+          "expr": "topk(30, sum by (section) (count_over_time({job=\"site-traffic\", agent=\"bot\", site=~\"$site\"} | json | kind=~\"page\" | bot=~\"Googlebot|GoogleOther|Google-InspectionTool|bingbot|Applebot|DuckDuckBot|YandexBot|Baiduspider|SeznamBot\" | path!=\"/robots.txt\" | label_format section=`{{ regexReplaceAll \"^(/[^/]+/[^/]+/).*$\" .path \"${1}\" }}` [$__range])))",
           "refId": "E",
           "queryType": "instant"
         }
@@ -748,7 +757,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (referrer) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "expr": "sum by (referrer) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" | path=\"/map/\" [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -815,7 +824,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (country) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__range]))",
+          "expr": "sum by (country) (count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" | path=\"/map/\" [$__range]))",
           "refId": "A",
           "queryType": "instant"
         }
@@ -882,7 +891,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | path=\"/map/\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"site-traffic\", agent=\"human\", site=~\"$site\"} | json | kind=~\"page\" | rendered=\"true\" | path=\"/map/\" [$__interval]))",
           "refId": "A",
           "legendFormat": "Human views"
         },
