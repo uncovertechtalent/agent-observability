@@ -412,7 +412,8 @@ class Run:
         try:
             answer, reasoning, rec = self.backend.chat(messages, temp, max_tokens)
         except CallFailed as e:
-            rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, "finish": "error", "error": e.kind}
+            rec = {**self.base_record(), "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cell": self.cell, "finish": "error", "error": e.kind,
+                   **(extra or {})}
             self.side.write(json.dumps(rec) + "\n")
             self.side.flush()
             self.tm.log("battery_call", {k: v for k, v in rec.items() if k != "ts"})
